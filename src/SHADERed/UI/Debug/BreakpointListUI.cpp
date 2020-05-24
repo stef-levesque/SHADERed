@@ -1,6 +1,7 @@
 #include <SHADERed/UI/Debug/BreakpointListUI.h>
 #include <imgui/imgui.h>
-#include <filesystem>
+
+#include <ghc/filesystem.hpp>
 
 namespace ed {
 	void DebugBreakpointListUI::OnEvent(const SDL_Event& e)
@@ -24,7 +25,7 @@ namespace ed {
 		ImGui::NextColumn();
 
 		for (const auto& bkpt : bkpts) {
-			std::string fileNameStr = std::filesystem::path(bkpt.first).filename().string();
+			std::string fileNameStr = ghc::filesystem::path(bkpt.first).filename();
 			const char* fileName = fileNameStr.c_str();
 			for (int i = 0; i < bkpt.second.size(); i++) {
 				ImGui::Separator();

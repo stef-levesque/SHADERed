@@ -10,7 +10,7 @@
 #include <SHADERed/UI/CreateItemUI.h>
 #include <SHADERed/UI/UIHelper.h>
 
-#include <filesystem>
+#include <ghc/filesystem.hpp>
 #include <fstream>
 #include <string.h>
 #include <glm/gtc/type_ptr.hpp>
@@ -1025,10 +1025,10 @@ namespace ed {
 	{
 		std::string fname = m_data->Parser.GetProjectPath(filename);
 
-		if (!std::filesystem::exists(fname)) {
-			std::filesystem::path path(fname);
+		if (!ghc::filesystem::exists(fname)) {
+			ghc::filesystem::path path(fname);
 			if (path.has_parent_path())
-				std::filesystem::create_directories(path.parent_path());
+				ghc::filesystem::create_directories(path.parent_path());
 			std::ofstream shdr(fname);
 			shdr << "// empty shader file\n";
 			shdr.close();

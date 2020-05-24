@@ -10,7 +10,7 @@
 #include <glslang/Public/ShaderLang.h>
 
 #include <chrono>
-#include <filesystem>
+#include <ghc/filesystem.hpp>
 #include <fstream>
 #include <thread>
 
@@ -43,13 +43,14 @@ int main(int argc, char* argv[])
 {
 	srand(time(NULL));
 
-	std::filesystem::path cmdDir = std::filesystem::current_path();
+	ghc::filesystem::path cmdDir = ghc::filesystem::current_path();
 
 	if (argc > 0) {
-		if (std::filesystem::exists(std::filesystem::path(argv[0]).parent_path())) {
-			std::filesystem::current_path(std::filesystem::path(argv[0]).parent_path());
+		if (ghc::filesystem::exists(ghc::filesystem::path(argv[0]).parent_path())) {
+			ghc::filesystem::current_path(ghc::filesystem::path(argv[0]).parent_path());
 
-			ed::Logger::Get().Log("Setting current_path to " + std::filesystem::current_path().generic_string());
+			ed::Logger::Get().Log("Setting current_path to " + ghc::filesystem::current_path().generic_string());
+
 		}
 	}
 
@@ -75,9 +76,9 @@ int main(int argc, char* argv[])
 		};
 
 		for (const auto& wrkpath : toCheck) {
-			if (std::filesystem::exists(exePath + wrkpath)) {
-				std::filesystem::current_path(exePath + wrkpath);
-				ed::Logger::Get().Log("Setting current_path to " + std::filesystem::current_path().generic_string());
+			if (ghc::filesystem::exists(exePath + wrkpath)) {
+				ghc::filesystem::current_path(exePath + wrkpath);
+				ed::Logger::Get().Log("Setting current_path to " + ghc::filesystem::current_path().generic_string());
 				break;
 			}
 		}
@@ -85,13 +86,13 @@ int main(int argc, char* argv[])
 #endif
 
 	// create data directory on startup
-	if (!std::filesystem::exists("./data/"))
-		std::filesystem::create_directory("./data/");
+	if (!ghc::filesystem::exists("./data/"))
+		ghc::filesystem::create_directory("./data/");
 
 	// delete log.txt on startup
-	if (std::filesystem::exists("./log.txt")) {
+	if (ghc::filesystem::exists("./log.txt")) {
 		std::error_code errCode;
-		std::filesystem::remove("./log.txt", errCode);
+		ghc::filesystem::remove("./log.txt", errCode);
 	}
 
 	// set stb_image flags
@@ -144,7 +145,7 @@ int main(int argc, char* argv[])
 		ed::Logger::Get().Log("Deleting data/workspace.dat", true);
 
 		std::error_code errCode;
-		std::filesystem::remove("./data/workspace.dat", errCode);
+		ghc::filesystem::remove("./data/workspace.dat", errCode);
 	}
 
 	// apply parsed CL options

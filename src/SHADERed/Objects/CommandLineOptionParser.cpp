@@ -1,6 +1,6 @@
 #include <SHADERed/Objects/CommandLineOptionParser.h>
 #include <string.h>
-#include <filesystem>
+#include <ghc/filesystem.hpp>
 #include <vector>
 
 namespace ed {
@@ -14,7 +14,7 @@ namespace ed {
 		ProjectFile = "";
 		WindowWidth = WindowHeight = 0;
 	}
-	void CommandLineOptionParser::Parse(const std::filesystem::path& cmdDir, int argc, char* argv[])
+	void CommandLineOptionParser::Parse(const ghc::filesystem::path& cmdDir, int argc, char* argv[])
 	{
 		for (int i = 0; i < argc; i++) {
 			// --minimal, -m
@@ -73,7 +73,7 @@ namespace ed {
 				LaunchUI = false;
 			}
 			// file path
-			else if (std::filesystem::exists(cmdDir / argv[i]))
+			else if (ghc::filesystem::exists(cmdDir / argv[i]))
 				ProjectFile = (cmdDir / argv[i]).generic_string();
 		}
 	}

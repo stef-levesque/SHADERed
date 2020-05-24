@@ -9,7 +9,7 @@
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
-#include <filesystem>
+#include <ghc/filesystem.hpp>
 #include <fstream>
 #include <iostream>
 
@@ -36,7 +36,7 @@ namespace ed {
 	{
 		Settings& sets = Settings::Instance();
 
-		if (std::filesystem::exists(sets.Editor.Font))
+		if (ghc::filesystem::exists(sets.Editor.Font))
 			m_font = ImGui::GetIO().Fonts->AddFontFromFileTTF(sets.Editor.Font, sets.Editor.FontSize);
 		else {
 			m_font = ImGui::GetIO().Fonts->AddFontDefault();

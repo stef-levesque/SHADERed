@@ -1,13 +1,13 @@
 #pragma once
 #include <string>
-#include <filesystem>
+#include <ghc/filesystem.hpp>
 
 namespace ed {
 	class CommandLineOptionParser {
 	public:
 		CommandLineOptionParser();
 
-		void Parse(const std::filesystem::path& cmdDir, int argc, char* argv[]);
+		void Parse(const ghc::filesystem::path& cmdDir, int argc, char* argv[]);
 
 		bool LaunchUI;
 

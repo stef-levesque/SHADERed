@@ -34,7 +34,7 @@
 #include <imgui/examples/imgui_impl_sdl.h>
 #include <imgui/imgui.h>
 
-#include <filesystem>
+#include <ghc/filesystem.hpp>
 #include <fstream>
 
 #include <stb/stb_image.h>
@@ -44,6 +44,8 @@
 #define STBIR_DEFAULT_FILTER_DOWNSAMPLE STBIR_FILTER_CATMULLROM
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include <stb/stb_image_resize.h>
+
+#include <ghc/filesystem.hpp>
 
 #if defined(__APPLE__)
 // no includes on mac os
@@ -330,19 +332,19 @@ namespace ed {
 			fonts->Clear();
 
 			ImFont* font = nullptr;
-			if (std::filesystem::exists(m_cachedFont))
+			if (ghc::filesystem::exists(m_cachedFont))
 				font = fonts->AddFontFromFileTTF(m_cachedFont.c_str(), m_cachedFontSize * Settings::Instance().DPIScale);
 
 			// icon font
 			static const ImWchar icon_ranges[] = { 0xea5b, 0xf026, 0 };
-			if (font && std::filesystem::exists("data/icofont.ttf")) {
+			if (font && ghc::filesystem::exists("data/icofont.ttf")) {
 				ImFontConfig config;
 				config.MergeMode = true;
 				fonts->AddFontFromFileTTF("data/icofont.ttf", m_cachedFontSize * Settings::Instance().DPIScale, &config, icon_ranges);
 			}
 
 			ImFont* edFontPtr = nullptr;
-			if (std::filesystem::exists(edFont.first))
+			if (ghc::filesystem::exists(edFont.first))
 				edFontPtr = fonts->AddFontFromFileTTF(edFont.first.c_str(), edFont.second * Settings::Instance().DPIScale);
 
 			if (font == nullptr || edFontPtr == nullptr) {
@@ -354,7 +356,7 @@ namespace ed {
 			}
 
 			// icon font large
-			if (std::filesystem::exists("data/icofont.ttf")) {
+			if (ghc::filesystem::exists("data/icofont.ttf")) {
 				ImFontConfig configIconsLarge;
 				m_iconFontLarge = ImGui::GetIO().Fonts->AddFontFromFileTTF("data/icofont.ttf", Settings::Instance().CalculateSize(TOOLBAR_HEIGHT / 2), &configIconsLarge, icon_ranges);
 			}
@@ -856,7 +858,7 @@ namespace ed {
 			static std::string left, top, front, bottom, right, back;
 			float btnWidth = Settings::Instance().CalculateSize(65.0f);
 
-			ImGui::Text("Left: %s", std::filesystem::path(left).filename().string().c_str());
+			ImGui::Text("Left: %s", ghc::filesystem::path(left).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##left")) {
@@ -864,7 +866,7 @@ namespace ed {
 				left = m_data->Parser.GetRelativePath(left);
 			}
 
-			ImGui::Text("Top: %s", std::filesystem::path(top).filename().string().c_str());
+			ImGui::Text("Top: %s", ghc::filesystem::path(top).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##top")) {
@@ -872,7 +874,7 @@ namespace ed {
 				top = m_data->Parser.GetRelativePath(top);
 			}
 
-			ImGui::Text("Front: %s", std::filesystem::path(front).filename().string().c_str());
+			ImGui::Text("Front: %s", ghc::filesystem::path(front).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##front")) {
@@ -880,7 +882,7 @@ namespace ed {
 				front = m_data->Parser.GetRelativePath(front);
 			}
 
-			ImGui::Text("Bottom: %s", std::filesystem::path(bottom).filename().string().c_str());
+			ImGui::Text("Bottom: %s", ghc::filesystem::path(bottom).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##bottom")) {
@@ -888,7 +890,7 @@ namespace ed {
 				bottom = m_data->Parser.GetRelativePath(bottom);
 			}
 
-			ImGui::Text("Right: %s", std::filesystem::path(right).filename().string().c_str());
+			ImGui::Text("Right: %s", ghc::filesystem::path(right).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##right")) {
@@ -896,7 +898,7 @@ namespace ed {
 				right = m_data->Parser.GetRelativePath(right);
 			}
 
-			ImGui::Text("Back: %s", std::filesystem::path(back).filename().string().c_str());
+			ImGui::Text("Back: %s", ghc::filesystem::path(back).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##back")) {
@@ -2372,8 +2374,8 @@ namespace ed {
 
 		Logger::Get().Log("Loading template list");
 
-		if (std::filesystem::exists("./templates/")) {
-			for (const auto& entry : std::filesystem::directory_iterator("./templates/")) {
+		if (ghc::filesystem::exists("./templates/")) {
+			for (const auto& entry : ghc::filesystem::directory_iterator("./templates/")) {
 				std::string file = entry.path().filename().string();
 				m_templates.push_back(file);
 

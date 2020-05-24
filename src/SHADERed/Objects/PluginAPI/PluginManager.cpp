@@ -15,7 +15,7 @@
 
 #include <imgui/imgui.h>
 #include <algorithm>
-#include <filesystem>
+#include <ghc/filesystem.hpp>
 
 #if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
 #include <dlfcn.h>
@@ -47,7 +47,7 @@ namespace ed {
 	}
 	void PluginManager::Init(InterfaceManager* data, GUIManager* ui)
 	{
-		if (!std::filesystem::exists("./plugins/")) {
+		if (!ghc::filesystem::exists("./plugins/")) {
 			ed::Logger::Get().Log("Directory for plugins doesn't exist");
 			return;
 		}
@@ -60,9 +60,9 @@ namespace ed {
 #endif
 
 
-		for (const auto& entry : std::filesystem::directory_iterator("./plugins/")) {
+		for (const auto& entry : ghc::filesystem::directory_iterator("./plugins/")) {
 			if (entry.is_directory()) {
-				std::string pdir = entry.path().filename().string();
+				std::string pdir = entry.path().filename().native();
 
 #if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
 				void* procDLL = dlopen(("./plugins/" + pdir + "/plugin.so").c_str(), RTLD_NOW);
