@@ -46,6 +46,16 @@ int main(int argc, char* argv[])
 	ghc::filesystem::path cmdDir = ghc::filesystem::current_path();
 
 	if (argc > 0) {
+#if defined(__APPLE__)
+		// check if we are running from .app
+		if (ghc::filesystem::exists(ghc::filesystem::path(argv[0]).parent_path().append("../Resources"))) {
+			ghc::filesystem::current_path(ghc::filesystem::path(argv[0]).parent_path().append("../Resources"));
+
+			ed::Logger::Get().Log("Setting current_path to " + ghc::filesystem::current_path().generic_string());
+
+		}
+		else
+#endif
 		if (ghc::filesystem::exists(ghc::filesystem::path(argv[0]).parent_path())) {
 			ghc::filesystem::current_path(ghc::filesystem::path(argv[0]).parent_path());
 
