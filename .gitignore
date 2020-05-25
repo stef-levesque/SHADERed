@@ -35,6 +35,9 @@ bin/plugins/*
 bin/Debug
 bin/Release
 
+# Bundled application
+bin/SHADERed.app
+
 # Local application settings
 settings.ini
 
