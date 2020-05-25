@@ -1,19 +1,26 @@
 /*_________
- /         \ hello.c v3.4.3 [Dec 8, 2019] zlib licence
+ /         \ hello.c v3.6.3 [May 11, 2020] zlib licence
  |tiny file| Hello World file created [November 9, 2014]
- | dialogs | Copyright (c) 2014 - 2018 Guillaume Vareille http://ysengrin.com
+ | dialogs | Copyright (c) 2014 - 2020 Guillaume Vareille http://ysengrin.com
  \____  ___/ http://tinyfiledialogs.sourceforge.net
       \|     git clone http://git.code.sf.net/p/tinyfiledialogs/code tinyfd
-		 ____________________________________________
-		|                                            |
-		|   email: tinyfiledialogs at ysengrin.com   |
-		|____________________________________________|
-         _________________________________________________________________
-        |                                                                 |
-        | this file is for windows and unix (osx linux, bsd, solaris ...) |
-        |_________________________________________________________________|
-	 
-Please upvote my stackoverflow answer https://stackoverflow.com/a/47651444
+              ____________________________________________
+             |                                            |
+             |   email: tinyfiledialogs at ysengrin.com   |
+             |____________________________________________|
+  _________________________________________________________________________________
+ |                                                                                 |
+ | the windows only wchar_t UTF-16 prototypes are at the bottom of the header file |
+ |_________________________________________________________________________________|
+  _________________________________________________________
+ |                                                         |
+ | on windows: - since v3.6 char is UTF-8 by default       |
+ |             - if you want MBCS set tinyfd_winUtf8 to 0  |
+ |             - functions like fopen expect MBCS          |
+ |_________________________________________________________|
+
+If you like tinyfiledialogs, please upvote my stackoverflow answer
+https://stackoverflow.com/a/47651444
 
 tiny file dialogs (cross-platform C C++)
 InputBox PasswordBox MessageBox ColorPicker
@@ -55,13 +62,13 @@ Unix (command line calls) ASCII UTF-8
 - basic console input
 the same executable can run across desktops & distributions
 
-C89 & C++98 compliant: tested with C & C++ compilers
+C89/C18 & C++98/C++20 compliant: tested with C & C++ compilers
 VisualStudio MinGW-gcc GCC Clang TinyCC OpenWatcom-v2 BorlandC SunCC ZapCC
 on Windows Mac Linux Bsd Solaris Minix Raspbian
 using Gnome Kde Enlightenment Mate Cinnamon Budgie Unity Lxde Lxqt Xfce
-WindowMaker IceWm Cde Jds OpenBox Awesome Jwm Xdm
+WindowMaker IceWm Cde Jds OpenBox Awesome Jwm Xdm Cwm
 
-Bindings for LUA and C# dll, Haskell
+Bindings for LUA and C# dll, Haskell, Fortran
 Included in LWJGL(java), Rust, Allegrobasic
 
 - License -
@@ -95,10 +102,14 @@ misrepresented as being the original software.
 #include <string.h>
 #include "tinyfiledialogs.h"
 
+#ifdef _MSC_VER
+#pragma warning(disable:4996) /* silences warnings about strcpy strcat fopen*/
+#endif
+
 int main( int argc , char * argv[] )
 {
 	int lIntValue;
-	char const * lTmp;
+	char const * lPassword;
 	char const * lTheSaveFileName;
 	char const * lTheOpenFileName;
 	char const * lTheSelectFolderName;
@@ -107,21 +118,21 @@ int main( int argc , char * argv[] )
 	unsigned char lRgbColor[3];
 	FILE * lIn;
 	char lBuffer[1024];
-	char lString[1024];
 	char const * lFilterPatterns[2] = { "*.txt", "*.text" };
 
+	/*tinyfd_forceConsole = 1;*/ /* default is 0 */
 	tinyfd_verbose = argc - 1;
-    tinyfd_silent = 1;
+	tinyfd_silent = 1;
 
 #ifdef _WIN32
-	tinyfd_winUtf8 = 0; /* on windows, you decide if char holds 0(default): MBCS or 1: UTF-8 */
+	/* tinyfd_winUtf8 = 1; */
+/* On windows, you decide if char holds 1:UTF-8(default) or 0:MBCS */
+/* Windows is not ready to handle UTF-8 as many char functions like fopen() expect MBCS filenames.*/	   
+/* This hello.c file has been prepared, on windows, to convert the filenames from UTF-8 to UTF-16
+   and pass them passed to _wfopen() instead of fopen() */
 #endif
 
 	lWillBeGraphicMode = tinyfd_inputBox("tinyfd_query", NULL, NULL);
-
-#ifdef _MSC_VER
-#pragma warning(disable:4996) /* silences warning about strcpy strcat fopen*/
-#endif
 
 	strcpy(lBuffer, "v");
 	strcat(lBuffer, tinyfd_version);
@@ -136,34 +147,24 @@ int main( int argc , char * argv[] )
 	strcat(lBuffer, tinyfd_response);
 	strcat(lBuffer, "\n");
 	strcat(lBuffer, tinyfd_needs+78);
-	strcpy(lString, "hello");
-	tinyfd_messageBox(lString, lBuffer, "ok", "info", 0);
+	tinyfd_messageBox("hello", lBuffer, "ok", "info", 0);
 
 	tinyfd_notifyPopup("the title", "the message\n\tfrom outer-space", "info");
 
-	/*tinyfd_forceConsole = 1;*/
 	if ( lWillBeGraphicMode && ! tinyfd_forceConsole )
 	{
 		lIntValue = tinyfd_messageBox("Hello World",
 			"graphic dialogs [yes] / console mode [no]?",
 			"yesno", "question", 1);
-		tinyfd_forceConsole = ! lIntValue ;
-	
-		/*lIntValue = tinyfd_messageBox("Hello World",
-			"graphic dialogs [yes] / console mode [no]?",
-			"yesnocancel", "question", 1);
-		tinyfd_forceConsole = (lIntValue == 2);*/
+		tinyfd_forceConsole = ! lIntValue ;	
 	}
 
-	lTmp = tinyfd_inputBox(
-		"a password box", "your password will be revealed", NULL);
+	lPassword = tinyfd_inputBox(
+		"a password box", "your password will be revealed later", NULL);
 
-	if (!lTmp) return 1 ;
+	if (!lPassword) return 1;
 
-	/* copy lTmp because saveDialog would overwrites
-	inputBox static buffer in basicinput mode */
-
-	strcpy(lString, lTmp);
+	tinyfd_messageBox("your password as read", lPassword, "ok", "info", 1);
 
 	lTheSaveFileName = tinyfd_saveFileDialog(
 		"let us save this password",
@@ -183,7 +184,13 @@ int main( int argc , char * argv[] )
 		return 1 ;
 	}
 
+#ifdef _WIN32
+	if (tinyfd_winUtf8)
+		lIn = _wfopen(tinyfd_utf8to16(lTheSaveFileName), L"w"); /* the UTF-8 filename is converted to UTF-16 to open the file*/
+	else
+#endif
 	lIn = fopen(lTheSaveFileName, "w");
+
 	if (!lIn)
 	{
 		tinyfd_messageBox(
@@ -194,7 +201,7 @@ int main( int argc , char * argv[] )
 			1);
 		return 1 ;
 	}
-	fputs(lString, lIn);
+	fputs(lPassword, lIn);
 	fclose(lIn);
 
 	lTheOpenFileName = tinyfd_openFileDialog(
@@ -212,15 +219,16 @@ int main( int argc , char * argv[] )
 			"Open file name is NULL",
 			"ok",
 			"error",
-			1);
+			0);
 		return 1 ;
 	}
 
-	lIn = fopen(lTheOpenFileName, "r");
-
-#ifdef _MSC_VER
-#pragma warning(default:4996)
+#ifdef _WIN32
+	if (tinyfd_winUtf8)
+		lIn = _wfopen(tinyfd_utf8to16(lTheOpenFileName), L"r"); /* the UTF-8 filename is converted to UTF-16 */
+	else
 #endif
+	lIn = fopen(lTheOpenFileName, "r");
 
 	if (!lIn)
 	{
@@ -232,12 +240,12 @@ int main( int argc , char * argv[] )
 			1);
 		return(1);
 	}
+
 	lBuffer[0] = '\0';
 	fgets(lBuffer, sizeof(lBuffer), lIn);
 	fclose(lIn);
 
-	tinyfd_messageBox("your password is",
-			lBuffer, "ok", "info", 1);
+	tinyfd_messageBox("your password as it was saved", lBuffer, "ok", "info", 1);
 
 	lTheSelectFolderName = tinyfd_selectFolderDialog(
 		"let us just select a directory", NULL);
@@ -253,8 +261,7 @@ int main( int argc , char * argv[] )
 		return 1;
 	}
 
-	tinyfd_messageBox("The selected folder is",
-		lTheSelectFolderName, "ok", "info", 1);
+	tinyfd_messageBox("The selected folder is", lTheSelectFolderName, "ok", "info", 1);
 
 	lTheHexColor = tinyfd_colorChooser(
 		"choose a nice color",
@@ -273,13 +280,18 @@ int main( int argc , char * argv[] )
 		return 1;
 	}
 
-	tinyfd_messageBox("The selected hexcolor is",
-		lTheHexColor, "ok", "info", 1);
+	tinyfd_messageBox("The selected hexcolor is", lTheHexColor, "ok", "info", 1);
+
+	tinyfd_messageBox("your read password was", lPassword, "ok", "info", 1);
 
 	tinyfd_beep();
 
 	return 0;
 }
+
+#ifdef _MSC_VER
+#pragma warning(default:4996)
+#endif
 
 /*
 OSX :
