@@ -5,6 +5,10 @@ project(SHADERed)
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
 
+if(${DEBUG})
+	set(CMAKE_BUILD_TYPE Debug)
+endif()
+
 # source code
 set(SOURCES
 	main.cpp
