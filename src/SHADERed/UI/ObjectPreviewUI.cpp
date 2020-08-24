@@ -5,6 +5,8 @@
 #include <SHADERed/UI/UIHelper.h>
 #include <imgui/imgui.h>
 
+#include <ImGuiFileDialog/ImGuiFileDialog.h>
+
 namespace ed {
 	void ObjectPreviewUI::Open(const std::string& name, float w, float h, unsigned int item, bool isCube, void* rt, void* audio, void* buffer, void* plugin)
 	{
@@ -80,7 +82,7 @@ namespace ed {
 
 				if (item->Plugin != nullptr) {
 					PluginObject* pobj = ((PluginObject*)item->Plugin);
-					pobj->Owner->ShowObjectExtendedPreview(pobj->Type, pobj->Data, pobj->ID);
+					pobj->Owner->Object_ShowExtendedPreview(pobj->Type, pobj->Data, pobj->ID);
 				} else {
 					glm::ivec2 iSize(item->Width, item->Height);
 					if (item->RT != nullptr)
@@ -196,41 +198,49 @@ namespace ed {
 							buf->PreviewPaused = !buf->PreviewPaused;
 						ImGui::SameLine();
 						if (ImGui::Button("LOAD BYTE DATA FROM TEXTURE")) {
-							std::string textureFile;
-							bool isOpen = UIHelper::GetOpenFileDialog(textureFile);
-							if (isOpen)
-								m_data->Objects.LoadBufferFromTexture(buf, textureFile);
+							m_dialogActionType = 0;
+							igfd::ImGuiFileDialog::Instance()->OpenModal("LoadObjectDlg", "Select a texture", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 						}
 						ImGui::SameLine();
 						if (ImGui::Button("LOAD FLOAT DATA FROM TEXTURE")) {
-							std::string textureFile;
-							bool isOpen = UIHelper::GetOpenFileDialog(textureFile);
-							if (isOpen)
-								m_data->Objects.LoadBufferFromTexture(buf, textureFile, true);
+							m_dialogActionType = 1;
+							igfd::ImGuiFileDialog::Instance()->OpenModal("LoadObjectDlg", "Select a texture", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 						}
 						if (ImGui::Button("LOAD DATA FROM 3D MODEL")) {
-							std::string modelFile;
-							bool isOpen = UIHelper::GetOpenFileDialog(modelFile);
-							if (isOpen)
-								m_data->Objects.LoadBufferFromModel(buf, modelFile);
+							m_dialogActionType = 2;
+							igfd::ImGuiFileDialog::Instance()->OpenModal("LoadObjectDlg", "3D model", ".*", ".");
 						}
 						ImGui::SameLine();
 						if (ImGui::Button("LOAD RAW DATA")) {
-							std::string filePath;
-							bool isOpen = UIHelper::GetOpenFileDialog(filePath);
-							if (isOpen)
-								m_data->Objects.LoadBufferFromFile(buf, filePath);
+							m_dialogActionType = 3;
+							igfd::ImGuiFileDialog::Instance()->OpenModal("LoadObjectDlg", "Open", ".*", ".");
+						}
+
+						if (igfd::ImGuiFileDialog::Instance()->FileDialog("LoadObjectDlg")) {
+							if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+								std::string file = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+
+								if (m_dialogActionType == 0)
+									m_data->Objects.LoadBufferFromTexture(buf, file);
+								else if (m_dialogActionType == 1)
+									m_data->Objects.LoadBufferFromTexture(buf, file, true);
+								else if (m_dialogActionType == 2)
+									m_data->Objects.LoadBufferFromModel(buf, file);
+								else if (m_dialogActionType == 3)
+									m_data->Objects.LoadBufferFromFile(buf, file);
+							}
+							igfd::ImGuiFileDialog::Instance()->CloseDialog("LoadObjectDlg");
 						}
 
 						ImGui::Separator();
 
 						// update buffer data every 350ms
 						ImGui::Text(buf->PreviewPaused ? "Buffer view is paused" : "Buffer view is updated every 350ms");
-						if (!buf->PreviewPaused && m_bufUpdateClock.getElapsedTime().asMilliseconds() > 350) {
+						if (!buf->PreviewPaused && m_bufUpdateClock.GetElapsedTime() > 0.350f) {
 							glBindBuffer(GL_SHADER_STORAGE_BUFFER, buf->ID);
 							glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, buf->Size, buf->Data);
 							glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-							m_bufUpdateClock.restart();
+							m_bufUpdateClock.Restart();
 						}
 
 						if (perRow != 0) {
@@ -309,7 +319,7 @@ namespace ed {
 							m_curHoveredItem = i;
 						
 							// handle pixel selection
-							if (item->RT != nullptr && ((ImGui::IsMouseClicked(0) && !Settings::Instance().Preview.SwitchLeftRightClick) || (ImGui::IsMouseClicked(1) && Settings::Instance().Preview.SwitchLeftRightClick)) && !ImGui::GetIO().KeyAlt) {
+							if (m_data->Renderer.IsPaused() && item->RT != nullptr && ((ImGui::IsMouseClicked(0) && !Settings::Instance().Preview.SwitchLeftRightClick) || (ImGui::IsMouseClicked(1) && Settings::Instance().Preview.SwitchLeftRightClick)) && !ImGui::GetIO().KeyAlt) {
 								m_ui->StopDebugging();
 
 								// screen space position
@@ -317,6 +327,14 @@ namespace ed {
 
 								m_data->DebugClick(s);
 							}
+						}
+
+						if (!ImGui::GetIO().KeyAlt && ImGui::BeginPopupContextItem("##context")) {
+							if (ImGui::Selectable("Save")) {
+								igfd::ImGuiFileDialog::Instance()->OpenModal("SavePreviewTextureDlg", "Save", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
+								m_saveObject = item->Name;
+							}
+							ImGui::EndPopup();
 						}
 
 						if (m_curHoveredItem == i && ImGui::GetIO().KeyAlt && ImGui::IsMouseDoubleClicked(0))
@@ -387,6 +405,15 @@ namespace ed {
 				m_lastRTSize.erase(m_lastRTSize.begin() + i);
 				i--;
 			}
+		}
+
+		if (igfd::ImGuiFileDialog::Instance()->FileDialog("SavePreviewTextureDlg")) {
+			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+				std::string filePath = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				ObjectManagerItem* oItem = m_data->Objects.GetObjectManagerItem(m_saveObject);
+				m_data->Objects.SaveToFile(m_saveObject, oItem, filePath);
+			}
+			igfd::ImGuiFileDialog::Instance()->CloseDialog("SavePreviewTextureDlg");
 		}
 	}
 	bool ObjectPreviewUI::m_drawBufferElement(int row, int col, void* data, ShaderVariable::ValueType type)

@@ -48,7 +48,6 @@ namespace ed {
 					continue;
 				}
 
-				bool isShaderPassActive = ((pipe::ShaderPass*)items[i]->Data)->Active;
 				ed::pipe::ShaderPass* data = (ed::pipe::ShaderPass*)items[i]->Data;
 
 				bool showItems = true;
@@ -62,10 +61,10 @@ namespace ed {
 					for (int j = 0; j < data->Items.size(); j++) {
 						m_renderItemUpDown(nullptr, data->Items, j);
 
-						if (!isShaderPassActive)
+						if (!data->Active)
 							ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
 						m_addItem(data->Items[j]);
-						if (!isShaderPassActive)
+						if (!data->Active)
 							ImGui::PopStyleVar();
 
 						if (m_renderItemContext(data->Items, j)) {
@@ -262,13 +261,33 @@ namespace ed {
 	{
 		(reinterpret_cast<CodeEditorUI*>(m_ui->Get(ViewID::Code)))->CloseAll(item);
 
-		// check if it is opened in property viewer
 		PropertyUI* props = (reinterpret_cast<PropertyUI*>(m_ui->Get(ViewID::Properties)));
+		PreviewUI* prev = (reinterpret_cast<PreviewUI*>(m_ui->Get(ViewID::Preview)));
+		
+		// check if it is opened in property viewer/picked
 		if (props->HasItemSelected() && props->CurrentItemName() == item->Name)
 			props->Open(nullptr);
+		if (prev->IsPicked(item))
+			prev->Pick(nullptr);
 
-		if ((reinterpret_cast<PreviewUI*>(m_ui->Get(ViewID::Preview)))->IsPicked(item))
-			(reinterpret_cast<PreviewUI*>(m_ui->Get(ViewID::Preview)))->Pick(nullptr);
+		// or their children
+		if (item->Type == PipelineItem::ItemType::ShaderPass) {
+			pipe::ShaderPass* pass = (pipe::ShaderPass*)item->Data;
+			for (const auto& child : pass->Items) {
+				if (props->HasItemSelected() && props->CurrentItemName() == child->Name)
+					props->Open(nullptr);
+				if (prev->IsPicked(child))
+					prev->Pick(nullptr);
+			}
+		} else if (item->Type == PipelineItem::ItemType::PluginItem) {
+			pipe::PluginItemData* pass = (pipe::PluginItemData*)item->Data;
+			for (const auto& child : pass->Items) {
+				if (props->HasItemSelected() && props->CurrentItemName() == child->Name)
+					props->Open(nullptr);
+				if (prev->IsPicked(child))
+					prev->Pick(nullptr);
+			}
+		}
 
 		// tell pipeline to remove this item
 		m_data->Messages.ClearGroup(item->Name);
@@ -290,7 +309,7 @@ namespace ed {
 					oldPropertyItemName = props->CurrentItemName();
 
 				if (owner != nullptr)
-					owner->Owner->MovePipelineItemUp(owner->PluginData, owner->Type, items[index]->Name);
+					owner->Owner->PipelineItem_MoveUp(owner->PluginData, owner->Type, items[index]->Name);
 
 				ed::PipelineItem* temp = items[index - 1];
 				items[index - 1] = items[index];
@@ -316,7 +335,7 @@ namespace ed {
 					oldPropertyItemName = props->CurrentItemName();
 
 				if (owner != nullptr)
-					owner->Owner->MovePipelineItemDown(owner->PluginData, owner->Type, items[index]->Name);
+					owner->Owner->PipelineItem_MoveDown(owner->PluginData, owner->Type, items[index]->Name);
 
 				ed::PipelineItem* temp = items[index + 1];
 				items[index + 1] = items[index];
@@ -342,10 +361,10 @@ namespace ed {
 			bool isPlugin = items[index]->Type == PipelineItem::ItemType::PluginItem;
 			pipe::PluginItemData* pldata = (pipe::PluginItemData*)items[index]->Data;
 
-			bool hasPluginProperties = isPlugin && pldata->Owner->HasPipelineItemProperties(pldata->Type);
-			bool hasPluginAddMenu = isPlugin && pldata->Owner->CanPipelineItemHaveChildren(pldata->Type);
-			bool hasPluginShaders = isPlugin && pldata->Owner->HasPipelineItemShaders(pldata->Type);
-			bool hasPluginContext = isPlugin && pldata->Owner->HasPipelineItemContext(pldata->Type);
+			bool hasPluginProperties = isPlugin && pldata->Owner->PipelineItem_HasProperties(pldata->Type, pldata->PluginData);
+			bool hasPluginAddMenu = isPlugin && pldata->Owner->PipelineItem_CanHaveChildren(pldata->Type, pldata->PluginData);
+			bool hasPluginShaders = isPlugin && pldata->Owner->PipelineItem_HasShaders(pldata->Type, pldata->PluginData);
+			bool hasPluginContext = isPlugin && pldata->Owner->PipelineItem_HasContext(pldata->Type, pldata->PluginData);
 
 			m_itemMenuOpened = true;
 			if (items[index]->Type == PipelineItem::ItemType::ShaderPass || items[index]->Type == PipelineItem::ItemType::ComputePass || items[index]->Type == PipelineItem::ItemType::AudioPass || hasPluginAddMenu) {
@@ -353,19 +372,19 @@ namespace ed {
 					m_data->Renderer.Recompile(items[index]->Name);
 
 				if ((hasPluginAddMenu || items[index]->Type == PipelineItem::ItemType::ShaderPass) && ImGui::BeginMenu("Add")) {
-					if ((!isPlugin || pldata->Owner->CanPipelineItemHaveChild(pldata->Type, plugin::PipelineItemType::Geometry)) && ImGui::MenuItem("Geometry")) {
+					if ((!isPlugin || pldata->Owner->PipelineItem_CanHaveChild(pldata->Type, pldata->PluginData, plugin::PipelineItemType::Geometry)) && ImGui::MenuItem("Geometry")) {
 						m_isCreateViewOpened = true;
 						m_createUI.SetOwner(items[index]->Name);
 						m_createUI.SetType(PipelineItem::ItemType::Geometry);
-					} else if ((!isPlugin || pldata->Owner->CanPipelineItemHaveChild(pldata->Type, plugin::PipelineItemType::Model)) && ImGui::MenuItem("3D Model")) {
+					} else if ((!isPlugin || pldata->Owner->PipelineItem_CanHaveChild(pldata->Type, pldata->PluginData, plugin::PipelineItemType::Model)) && ImGui::MenuItem("3D Model")) {
 						m_isCreateViewOpened = true;
 						m_createUI.SetOwner(items[index]->Name);
 						m_createUI.SetType(PipelineItem::ItemType::Model);
-					} else if ((!isPlugin || pldata->Owner->CanPipelineItemHaveChild(pldata->Type, plugin::PipelineItemType::VertexBuffer)) && ImGui::MenuItem("Vertex Buffer")) {
+					} else if ((!isPlugin || pldata->Owner->PipelineItem_CanHaveChild(pldata->Type, pldata->PluginData, plugin::PipelineItemType::VertexBuffer)) && ImGui::MenuItem("Vertex Buffer")) {
 						m_isCreateViewOpened = true;
 						m_createUI.SetOwner(items[index]->Name);
 						m_createUI.SetType(PipelineItem::ItemType::VertexBuffer);
-					} else if ((!isPlugin || pldata->Owner->CanPipelineItemHaveChild(pldata->Type, plugin::PipelineItemType::RenderState)) && ImGui::MenuItem("Render State")) {
+					} else if ((!isPlugin || pldata->Owner->PipelineItem_CanHaveChild(pldata->Type, pldata->PluginData, plugin::PipelineItemType::RenderState)) && ImGui::MenuItem("Render State")) {
 						m_isCreateViewOpened = true;
 						m_createUI.SetOwner(items[index]->Name);
 						m_createUI.SetType(PipelineItem::ItemType::RenderState);
@@ -373,7 +392,7 @@ namespace ed {
 
 					if (!isPlugin)
 						m_data->Plugins.ShowContextItems("shaderpass_add", (void*)items[index]);
-					else if (pldata->Owner->CanPipelineItemHaveChild(pldata->Type, plugin::PipelineItemType::PluginItem)) {
+					else if (pldata->Owner->PipelineItem_CanHaveChild(pldata->Type, pldata->PluginData, plugin::PipelineItemType::PluginItem)) {
 						pipe::PluginItemData* piData = ((pipe::PluginItemData*)items[index]->Data);
 
 						m_data->Plugins.ShowContextItems("pluginitem_add", (void*)piData->Type, piData->PluginData);
@@ -440,8 +459,14 @@ namespace ed {
 					m_modalItem = items[index];
 				}
 
-			} else if (items[index]->Type == ed::PipelineItem::ItemType::Geometry || items[index]->Type == ed::PipelineItem::ItemType::Model || items[index]->Type == ed::PipelineItem::ItemType::VertexBuffer) {
-				if (ImGui::MenuItem("Change Variables")) {
+			} else if (items[index]->Type == ed::PipelineItem::ItemType::Geometry || items[index]->Type == ed::PipelineItem::ItemType::Model || items[index]->Type == ed::PipelineItem::ItemType::VertexBuffer || items[index]->Type == ed::PipelineItem::ItemType::PluginItem) {
+				bool proc = true;
+				if (items[index]->Type == ed::PipelineItem::ItemType::PluginItem) {
+					pipe::PluginItemData* plData = (pipe::PluginItemData*)items[index]->Data;
+					proc = plData->Owner->PipelineItem_CanChangeVariables(plData->Type, plData->PluginData);
+				}
+
+				if (proc && ImGui::MenuItem("Change Variables")) {
 					m_isChangeVarsOpened = true;
 					m_modalItem = items[index];
 				}
@@ -449,7 +474,7 @@ namespace ed {
 
 			if (hasPluginContext) {
 				if (hasPluginAddMenu) ImGui::Separator();
-				pldata->Owner->ShowPipelineItemContext(pldata->Type, pldata->PluginData);
+				pldata->Owner->PipelineItem_ShowContext(pldata->Type, pldata->PluginData);
 				ImGui::Separator();
 			}
 
@@ -496,10 +521,10 @@ namespace ed {
 		ShaderVariable::ValueType type = var->GetType();
 
 		bool canInvert = type >= ShaderVariable::ValueType::Float2x2 && type <= ShaderVariable::ValueType::Float4x4;
-		bool canLastFrame = var->System != ed::SystemShaderVariable::Time && var->System != ed::SystemShaderVariable::IsPicked && var->System != ed::SystemShaderVariable::ViewportSize;
+		bool canLastFrame = var->System != ed::SystemShaderVariable::Time && var->System != ed::SystemShaderVariable::IsPicked && var->System != ed::SystemShaderVariable::IsSavingToFile && var->System != ed::SystemShaderVariable::ViewportSize;
 
 		if (var->System == ed::SystemShaderVariable::PluginVariable)
-			canLastFrame = canLastFrame || var->PluginSystemVarData.Owner->HasLastFrame(var->PluginSystemVarData.Name, (plugin::VariableType)var->GetType());
+			canLastFrame = canLastFrame || var->PluginSystemVarData.Owner->SystemVariables_HasLastFrame(var->PluginSystemVarData.Name, (plugin::VariableType)var->GetType());
 
 		bool isInvert = var->Flags & (char)ShaderVariable::Flag::Inverse;
 		bool isLastFrame = var->Flags & (char)ShaderVariable::Flag::LastFrame;
@@ -678,7 +703,8 @@ namespace ed {
 		bool isCompute = m_modalItem->Type == PipelineItem::ItemType::ComputePass;
 		bool isAudio = m_modalItem->Type == PipelineItem::ItemType::AudioPass;
 
-		bool isGLSL = ShaderCompiler::GetShaderLanguageFromExtension(((pipe::ShaderPass*)itemData)->VSPath) != ShaderLanguage::HLSL;
+		ShaderLanguage vsLang = ShaderCompiler::GetShaderLanguageFromExtension(((pipe::ShaderPass*)itemData)->VSPath);
+		bool isGLSL = (vsLang == ShaderLanguage::GLSL) || (vsLang == ShaderLanguage::VulkanGLSL);
 
 		ImGui::TextWrapped("Add or remove variables bound to this shader pass.");
 
@@ -886,7 +912,7 @@ namespace ed {
 		ImGui::PopStyleColor();
 
 		// render value edit window if needed
-		ImGui::SetNextWindowSize(ImVec2(450, 175), ImGuiCond_Once);
+		ImGui::SetNextWindowSize(ImVec2(Settings::Instance().CalculateSize(450), Settings::Instance().CalculateSize(200)), ImGuiCond_Once);
 		if (ImGui::BeginPopupModal("Value Edit##pui_shader_value_edit")) {
 			m_valueEdit.Update();
 
@@ -1612,7 +1638,7 @@ namespace ed {
 					newData->Items = origData->Items; // even tho this should be empty
 					newData->Owner = origData->Owner;
 
-					newData->PluginData = origData->Owner->CopyPipelineItemData(origData->Type, origData->PluginData);
+					newData->PluginData = origData->Owner->PipelineItem_CopyData(origData->Type, origData->PluginData);
 
 					itemData = newData;
 				}
@@ -1646,11 +1672,22 @@ namespace ed {
 	{
 		ed::pipe::ComputePass* data = (ed::pipe::ComputePass*)item->Data;
 
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+		if (ImGui::Button(std::string(std::string(data->Active ? UI_ICON_EYE : UI_ICON_EYE_BLOCKED) + "##hide" + std::string(item->Name)).c_str(), BUTTON_ICON_SIZE)) {
+			data->Active = !data->Active;
+			m_data->Parser.ModifyProject();
+		}
+		ImGui::PopStyleColor();
+		ImGui::SameLine();
+
 		int ewCount = m_data->Messages.GetGroupErrorAndWarningMsgCount(item->Name);
 		if (ewCount > 0)
 			ImGui::PushStyleColor(ImGuiCol_Text, ThemeContainer::Instance().GetTextEditorStyle(Settings::Instance().Theme)[(int)TextEditor::PaletteIndex::ErrorMessage]);
 		else
 			ImGui::PushStyleColor(ImGuiCol_Text, ThemeContainer::Instance().GetCustomStyle(Settings::Instance().Theme).ComputePass);
+		if (!data->Active)
+			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+
 
 		ImGui::Indent(PIPELINE_SHADER_PASS_INDENT);
 		if (ImGui::Selectable(item->Name, false, ImGuiSelectableFlags_AllowDoubleClick))
@@ -1671,6 +1708,10 @@ namespace ed {
 				}
 			}
 		ImGui::Unindent(PIPELINE_SHADER_PASS_INDENT);
+
+
+		if (!data->Active)
+			ImGui::PopStyleVar();
 		ImGui::PopStyleColor();
 	}
 	void PipelineUI::m_addAudioPass(ed::PipelineItem* item)
@@ -1711,16 +1752,16 @@ namespace ed {
 		ImGui::Indent(PIPELINE_SHADER_PASS_INDENT);
 		if (ImGui::Selectable(item->Name, false, ImGuiSelectableFlags_AllowDoubleClick))
 			if (ImGui::IsMouseDoubleClicked(0)) {
-				if (Settings::Instance().General.OpenShadersOnDblClk && data->Owner->HasPipelineItemShaders(data->Type)) {
+				if (Settings::Instance().General.OpenShadersOnDblClk && data->Owner->PipelineItem_HasShaders(data->Type, data->PluginData)) {
 					if (Settings::Instance().General.UseExternalEditor && m_data->Parser.GetOpenedFile() == "")
 						m_ui->SaveAsProject(true);
 					else {
 						CodeEditorUI* editor = (reinterpret_cast<CodeEditorUI*>(m_ui->Get(ViewID::Code)));
-						data->Owner->OpenPipelineItemInEditor((void*)editor, data->Type, data->PluginData);
+						data->Owner->PipelineItem_OpenInEditor(data->Type, data->PluginData);
 					}
 				}
 
-				if (Settings::Instance().General.ItemPropsOnDblCLk && data->Owner->HasPipelineItemProperties(data->Type)) {
+				if (Settings::Instance().General.ItemPropsOnDblCLk && data->Owner->PipelineItem_HasProperties(data->Type, data->PluginData)) {
 					PropertyUI* props = reinterpret_cast<PropertyUI*>(m_ui->Get(ViewID::Properties));
 					props->Open(item);
 				}
@@ -1731,7 +1772,7 @@ namespace ed {
 				// TODO: m_data->Pipeline.DuplicateItem() ?
 				ed::PipelineItem* dropItem = *(reinterpret_cast<ed::PipelineItem**>(payload->Data));
 
-				if (data->Owner->CanPipelineItemHaveChild(data->Type, (plugin::PipelineItemType)dropItem->Type)) {
+				if (data->Owner->PipelineItem_CanHaveChild(data->Type, data->PluginData, (plugin::PipelineItemType)dropItem->Type)) {
 
 					bool duplicate = ImGui::GetIO().KeyCtrl;
 
@@ -1761,7 +1802,7 @@ namespace ed {
 						}
 					}
 
-					std::vector<InputLayoutItem> inpLayout = m_data->Plugins.BuildInputLayout(data->Owner, item->Name);
+					std::vector<InputLayoutItem> inpLayout = m_data->Plugins.BuildInputLayout(data->Owner, data->Type, data->PluginData);
 
 					// get item owner
 					void* itemData = nullptr;
@@ -1860,7 +1901,7 @@ namespace ed {
 						newData->Owner = origData->Owner;
 						newData->PluginData = origData->PluginData;
 
-						newData->PluginData = origData->Owner->CopyPipelineItemData(origData->Type, origData->PluginData);
+						newData->PluginData = origData->Owner->PipelineItem_CopyData(origData->Type, origData->PluginData);
 
 						itemData = newData;
 					}
@@ -1889,8 +1930,8 @@ namespace ed {
 	{
 		pipe::PluginItemData* pluginData = (pipe::PluginItemData*)item->Data;
 		bool isPluginItem = item->Type == PipelineItem::ItemType::PluginItem;
-		bool hasPluginProperties = isPluginItem && pluginData->Owner->HasPipelineItemProperties(pluginData->Type);
-		bool isPluginPickable = isPluginItem && pluginData->Owner->IsPipelineItemPickable(pluginData->Type);
+		bool hasPluginProperties = isPluginItem && pluginData->Owner->PipelineItem_HasProperties(pluginData->Type, pluginData->PluginData);
+		bool isPluginPickable = isPluginItem && pluginData->Owner->PipelineItem_IsPickable(pluginData->Type, pluginData->PluginData);
 
 		ImGui::Indent(PIPELINE_ITEM_INDENT);
 		if (ImGui::Selectable(item->Name, false, ImGuiSelectableFlags_AllowDoubleClick))

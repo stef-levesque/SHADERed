@@ -1,6 +1,7 @@
 #include <SHADERed/GUIManager.h>
 #include <SHADERed/InterfaceManager.h>
 #include <SHADERed/Objects/Names.h>
+#include <SHADERed/Objects/ShaderCompiler.h>
 #include <SHADERed/Objects/SystemVariableManager.h>
 
 #include <glm/gtc/type_ptr.hpp>
@@ -42,10 +43,10 @@ namespace ed {
 
 	InterfaceManager::InterfaceManager(GUIManager* gui)
 			: Renderer(&Pipeline, &Objects, &Parser, &Messages, &Plugins, &Debugger)
-			, Pipeline(&Parser)
+			, Pipeline(&Parser, &Plugins)
 			, Objects(&Parser, &Renderer)
 			, Parser(&Pipeline, &Objects, &Renderer, &Plugins, &Messages, &Debugger, gui)
-			, Debugger(&Objects, &Renderer)
+			, Debugger(&Objects, &Renderer, &Messages)
 	{
 		m_ui = gui;
 	}
@@ -58,6 +59,9 @@ namespace ed {
 	{
 		Debugger.ClearPixelList();
 
+		if (!m_canDebug())
+			return;
+
 		// info
 		const std::vector<ObjectManagerItem*>& objs = Objects.GetItemDataList();
 		glm::ivec2 previewSize = Renderer.GetLastRenderSize();
@@ -69,7 +73,7 @@ namespace ed {
 
 		// results
 		std::unordered_map<GLuint, glm::vec4> pixelColors;
-		std::unordered_map<GLuint, std::pair<ed::PipelineItem*, ed::PipelineItem*>> pipelineItems;
+		std::unordered_map<GLuint, std::pair<PipelineItem*, PipelineItem*>> pipelineItems;
 
 		// get max RT size
 		for (int i = 0; i < objs.size(); i++) {
@@ -139,19 +143,26 @@ namespace ed {
 				pipe::VertexBuffer* bufData = ((pipe::VertexBuffer*)k.second.second->Data);
 
 				objTopology = bufData->Topology;
-				vertexCount = TOPOLOGY_SINGLE_VERTEX_COUNT[bufData->Topology];
+				vertexCount = TOPOLOGY_SINGLE_VERTEX_COUNT[objTopology];
 			} else if (k.second.second->Type == ed::PipelineItem::ItemType::Model) {
 				pipe::Model* objData = ((pipe::Model*)k.second.second->Data);
 				instanceBuffer = (BufferObject*)objData->InstanceBuffer;
+			} else if (k.second.second->Type == ed::PipelineItem::ItemType::PluginItem) {
+				pipe::PluginItemData* objData = ((pipe::PluginItemData*)k.second.second->Data);
+
+				objTopology = objData->Owner->PipelineItem_GetTopology(objData->Type, objData->PluginData);
+				vertexCount = TOPOLOGY_SINGLE_VERTEX_COUNT[objTopology];
 			}
 
 			int rtIndex = 0;
-			pipe::ShaderPass* pass = (pipe::ShaderPass*)k.second.first->Data;
-			for (int i = 0; i < pass->RTCount; i++)
-				if (pass->RenderTextures[i] == k.first) {
-					rtIndex = i;
-					break;
-				}
+			if (k.second.first->Type == PipelineItem::ItemType::ShaderPass) {
+				pipe::ShaderPass* pass = (pipe::ShaderPass*)k.second.first->Data;
+				for (int i = 0; i < pass->RTCount; i++)
+					if (pass->RenderTextures[i] == k.first) {
+						rtIndex = i;
+						break;
+					}
+			}
 
 			PixelInformation pxInfo;
 			pxInfo.Color = pixelColors[k.first];
@@ -178,8 +189,6 @@ namespace ed {
 	}
 	void InterfaceManager::FetchPixel(PixelInformation& pixel)
 	{
-		pipe::ShaderPass* pass = (pipe::ShaderPass*)pixel.Pass->Data;
-
 		int vertexGroupID = Renderer.DebugVertexPick(pixel.Pass, pixel.Object, pixel.RelativeCoordinate, -1);
 		int vertexID = Renderer.DebugVertexPick(pixel.Pass, pixel.Object, pixel.RelativeCoordinate, vertexGroupID);
 
@@ -195,7 +204,7 @@ namespace ed {
 
 		Debugger.PrepareVertexShader(pixel.Pass, pixel.Object);
 		for (int i = 0; i < pixel.VertexCount; i++) {
-			Debugger.SetVertexShaderInput(pass, pixel.Vertex[i], pixel.VertexID + i, pixel.InstanceID, (BufferObject*)pixel.InstanceBuffer);
+			Debugger.SetVertexShaderInput(pixel.Pass, pixel.Vertex[i], pixel.VertexID + i, pixel.InstanceID, (BufferObject*)pixel.InstanceBuffer);
 			pixel.glPosition[i] = Debugger.ExecuteVertexShader();
 			Debugger.CopyVertexShaderOutput(pixel, i);
 		}
@@ -234,7 +243,8 @@ namespace ed {
 				copyFloatData(pixel.Vertex[2], &bufData[36]);
 			}
 			glBindBuffer(GL_ARRAY_BUFFER, 0);
-		} else if (pixel.Object->Type == PipelineItem::ItemType::Model) {
+		} 
+		else if (pixel.Object->Type == PipelineItem::ItemType::Model) {
 			pipe::Model* mdl = ((pipe::Model*)pixel.Object->Data);
 
 			int curOffset = 0;
@@ -248,7 +258,8 @@ namespace ed {
 				pixel.Vertex[1] = mesh.Vertices[mesh.Indices[pixel.VertexID + 1]];
 				pixel.Vertex[2] = mesh.Vertices[mesh.Indices[pixel.VertexID + 2]];
 			}
-		} else if (pixel.Object->Type == PipelineItem::ItemType::VertexBuffer) {
+		} 
+		else if (pixel.Object->Type == PipelineItem::ItemType::VertexBuffer) {
 			pipe::VertexBuffer* vBuffer = ((pipe::VertexBuffer*)pixel.Object->Data);
 			ed::BufferObject* bufData = (ed::BufferObject*)vBuffer->Buffer;
 
@@ -282,12 +293,82 @@ namespace ed {
 			}
 
 			free(bufPtr);
-		}
+		} 
+		else if (pixel.Object->Type == PipelineItem::ItemType::PluginItem) {
+			pipe::PluginItemData* pdata = (pipe::PluginItemData*)pixel.Object->Data;
+			
+			GLuint vbo = pdata->Owner->PipelineItem_GetVBO(pdata->Type, pdata->PluginData);
+			GLuint vboStride = pdata->Owner->PipelineItem_GetVBOStride(pdata->Type, pdata->PluginData);
+			int inpLayoutSize = pdata->Owner->PipelineItem_GetInputLayoutSize(pdata->Type, pdata->PluginData);
+			
+			// TODO: don't bother GPU so much
+			glBindBuffer(GL_ARRAY_BUFFER, vbo);
+			for (int i = 0; i < pixel.VertexCount; i++) {
+				GLfloat bufData[18] = { 0.0f };
+				glGetBufferSubData(GL_ARRAY_BUFFER, (pixel.VertexID + i) * vboStride * sizeof(float), vboStride * sizeof(float), &bufData[0]);
+
+				int bufIndex = 0;
+				for (int j = 0; j < inpLayoutSize; j++) {
+					plugin::InputLayoutItem layItem;
+					pdata->Owner->PipelineItem_GetInputLayoutItem(pdata->Type, pdata->PluginData, j, layItem);
+					int valSize = InputLayoutItem::GetValueSize((InputLayoutValue)layItem.Value);
+
+					for (int k = 0; k < valSize; k++) {
+						if (layItem.Value == plugin::InputLayoutValue::Position)
+							pixel.Vertex[i].Position[k] = bufData[bufIndex + k];
+						else if (layItem.Value == plugin::InputLayoutValue::Texcoord)
+							pixel.Vertex[i].TexCoords[k] = bufData[bufIndex + k];
+						else if (layItem.Value == plugin::InputLayoutValue::Color)
+							pixel.Vertex[i].Color[k] = bufData[bufIndex + k];
+						else if (layItem.Value == plugin::InputLayoutValue::Binormal)
+							pixel.Vertex[i].Binormal[k] = bufData[bufIndex + k];
+						else if (layItem.Value == plugin::InputLayoutValue::Normal)
+							pixel.Vertex[i].Normal[k] = bufData[bufIndex + k];
+						else if (layItem.Value == plugin::InputLayoutValue::Tangent)
+							pixel.Vertex[i].Tangent[k] = bufData[bufIndex + k];
+					}
+
+					bufIndex += valSize;
+				}
+			}
+			glBindBuffer(GL_ARRAY_BUFFER, 0);
+		} 
 	}
 	void InterfaceManager::OnEvent(const SDL_Event& e)
 	{
+		Objects.OnEvent(e);
 	}
 	void InterfaceManager::Update(float delta)
 	{
+	}
+	bool InterfaceManager::m_canDebug()
+	{
+		bool ret = true;
+		
+		for (const auto& i : Pipeline.GetList()) {
+			if (i->Type == PipelineItem::ItemType::ShaderPass) {
+				pipe::ShaderPass* pass = (pipe::ShaderPass*)i->Data;
+				int langID = -1;
+
+				IPlugin1* plugin = ed::ShaderCompiler::GetPluginLanguageFromExtension(&langID, pass->VSPath, Plugins.Plugins());
+				ret &= (plugin != nullptr && plugin->CustomLanguage_IsDebuggable(langID)) || plugin == nullptr;
+
+				plugin = ed::ShaderCompiler::GetPluginLanguageFromExtension(&langID, pass->PSPath, Plugins.Plugins());
+				ret &= (plugin != nullptr && plugin->CustomLanguage_IsDebuggable(langID)) || plugin == nullptr;
+
+				if (pass->GSUsed) {
+					plugin = ed::ShaderCompiler::GetPluginLanguageFromExtension(&langID, pass->GSPath, Plugins.Plugins());
+					ret &= (plugin != nullptr && plugin->CustomLanguage_IsDebuggable(langID)) || plugin == nullptr;
+				}
+			} else if (i->Type == PipelineItem::ItemType::ComputePass) {
+				pipe::ComputePass* pass = (pipe::ComputePass*)i->Data;
+				int langID = -1;
+
+				IPlugin1* plugin = ed::ShaderCompiler::GetPluginLanguageFromExtension(&langID, pass->Path, Plugins.Plugins());
+				ret &= (plugin != nullptr && plugin->CustomLanguage_IsDebuggable(langID)) || plugin == nullptr;
+			}
+		}
+
+		return ret;
 	}
 }

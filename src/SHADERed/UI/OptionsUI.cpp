@@ -7,6 +7,8 @@
 #include <SHADERed/UI/OptionsUI.h>
 #include <SHADERed/UI/UIHelper.h>
 
+#include <ImGuiFileDialog/ImGuiFileDialog.h>
+
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 #include <algorithm>
@@ -53,7 +55,6 @@ namespace ed {
 			}
 		}
 	}
-
 	void OptionsUI::Update(float delta)
 	{
 		ImGui::BeginChild("##opt_container", ImVec2(0, Settings::Instance().CalculateSize(-30)));
@@ -72,8 +73,37 @@ namespace ed {
 			m_renderPlugins();
 		else if (m_page == Page::Project)
 			m_renderProject();
+		else if (m_page == Page::CodeSnippets)
+			m_renderCodeSnippets();
 
 		ImGui::EndChild();
+
+		
+		
+		if (igfd::ImGuiFileDialog::Instance()->FileDialog("OptionsFontDlg")) {
+			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+				std::string file = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				file = ghc::filesystem::relative(file).generic_string();
+				strcpy(m_dialogPath, file.c_str());
+			}
+			igfd::ImGuiFileDialog::Instance()->CloseDialog("OptionsFontDlg");
+		}
+		if (igfd::ImGuiFileDialog::Instance()->FileDialog("AddIncludeDirDlg")) {
+			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+				std::string ipath = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				bool exists = false;
+				for (int i = 0; i < Settings::Instance().Project.IncludePaths.size(); i++)
+					if (Settings::Instance().Project.IncludePaths[i] == ipath) {
+						exists = true;
+						break;
+					}
+				if (!exists) {
+					m_data->Parser.ModifyProject();
+					Settings::Instance().Project.IncludePaths.push_back(m_data->Parser.GetRelativePath(ipath));
+				}
+			}
+			igfd::ImGuiFileDialog::Instance()->CloseDialog("AddIncludeDirDlg");
+		}
 
 		if (m_overwriteShortcutOpened) {
 			ImGui::OpenPopup("Are you sure?##opts_popup_shrtct");
@@ -100,7 +130,6 @@ namespace ed {
 			ImGui::EndPopup();
 		}
 	}
-
 	void OptionsUI::ApplyTheme()
 	{
 		Logger::Get().Log("Applying UI theme to SHADERed...");
@@ -161,6 +190,26 @@ namespace ed {
 			}
 		}
 	}
+	void OptionsUI::m_initSnippetEditor()
+	{
+		m_snippetCode.SetSidebarVisible(false);
+		m_snippetCode.SetSearchEnabled(false);
+		m_snippetCode.SetPalette(ThemeContainer::Instance().GetTextEditorStyle(Settings::Instance().Theme));
+		m_snippetCode.SetTabSize(4);
+		m_snippetCode.SetInsertSpaces(false);
+		m_snippetCode.SetSmartIndent(true);
+		m_snippetCode.SetAutoIndentOnPaste(false);
+		m_snippetCode.SetShowWhitespaces(true);
+		m_snippetCode.SetHighlightLine(false);
+		m_snippetCode.SetShowLineNumbers(false);
+		m_snippetCode.SetCompleteBraces(false);
+		m_snippetCode.SetHorizontalScroll(true);
+		m_snippetCode.SetSmartPredictions(false);
+		m_snippetCode.SetActiveAutocomplete(false);
+		m_snippetCode.SetColorizerEnable(true);
+		m_snippetCode.SetScrollbarMarkers(false);
+		m_snippetCode.SetLanguageDefinition(TextEditor::LanguageDefinition::GLSL());		
+	}
 	void OptionsUI::m_loadThemeList()
 	{
 		Logger::Get().Log("Loading a theme list...");
@@ -169,10 +218,17 @@ namespace ed {
 		m_themes.push_back("Dark");
 		m_themes.push_back("Light");
 
-		if (ghc::filesystem::exists("./themes/")) {
-			for (const auto& entry : ghc::filesystem::directory_iterator("./themes/")) {
-				std::string file = entry.path().filename().native();
-				m_themes.push_back(ThemeContainer::Instance().LoadTheme(file));
+		std::vector<std::string> pathList = {
+			"./themes/"
+		};
+		if (!Settings().Instance().LinuxHomeDirectory.empty())
+			pathList.push_back(Settings().Instance().LinuxHomeDirectory + "themes/");
+
+		for (const auto& pathToCheck : pathList) {
+			if (ghc::filesystem::exists(pathToCheck)) {
+				for (const auto& entry : ghc::filesystem::directory_iterator(pathToCheck)) {
+					m_themes.push_back(ThemeContainer::Instance().LoadTheme(entry.path().generic_string()));
+				}
 			}
 		}
 	}
@@ -240,18 +296,55 @@ namespace ed {
 		ImGui::SameLine();
 		ImGui::Checkbox("##optg_checkupdates", &settings->General.CheckUpdates);
 
+		/* CHECK FOR PLUGIN UPDATES: */
+		ImGui::Text("Check for plugin updates on startup: ");
+		ImGui::SameLine();
+		ImGui::Checkbox("##optg_checkpluginupdates", &settings->General.CheckPluginUpdates);
+
 		/* TRACK FILE CHANGES: */
 		ImGui::Text("Recompile shader on file change: ");
 		ImGui::SameLine();
 		ImGui::Checkbox("##optg_trackfilechange", &settings->General.RecompileOnFileChange);
 
 		/* AUTO RECOMPILE */
-		ImGui::Text("Recompile shader every 200ms: ");
+		ImGui::Text("Recompile shader on content change: ");
 		ImGui::SameLine();
 		ImGui::Checkbox("##optg_autorecompile", &settings->General.AutoRecompile);
 
+		/* AUTO UNIFORMS: */
+		ImGui::Text("Automatically detect and add uniforms to variable manager: ");
+		ImGui::SameLine();
+		ImGui::Checkbox("##optg_autouniforms", &settings->General.AutoUniforms);
+
+		if (!settings->General.AutoUniforms) {
+			ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+		}
+		ImGui::Indent(settings->CalculateSize(60));
+
+		/* PIN UNIFORMS */
+		ImGui::Text("Pin detected uniforms: ");
+		ImGui::SameLine();
+		ImGui::Checkbox("##optg_autouniformspin", &settings->General.AutoUniformsPin);
+
+		/* UNIFORM FUNCTION */
+		ImGui::Text("Detect uniform's usage: ");
+		ImGui::SameLine();
+		ImGui::Checkbox("##optg_autouniformsfunction", &settings->General.AutoUniformsFunction);
+
+		/* DELETE UNIFORMS */
+		ImGui::Text("Delete unused uniforms: ");
+		ImGui::SameLine();
+		ImGui::Checkbox("##optg_autouniformsdelete", &settings->General.AutoUniformsDelete);
+
+		ImGui::Unindent(settings->CalculateSize(60));
+		if (!settings->General.AutoUniforms) {
+			ImGui::PopStyleVar();
+			ImGui::PopItemFlag();
+		}
+
 		/* REOPEN: */
-		ImGui::Text("Reopen shaders after openning a project: ");
+		ImGui::Text("Reopen shaders after opening a project: ");
 		ImGui::SameLine();
 		ImGui::Checkbox("##optg_reopen", &settings->General.ReopenShaders);
 
@@ -295,9 +388,9 @@ namespace ed {
 		ImGui::PopItemWidth();
 
 		/* HLSL EXTENSIONS: */
-		ImGui::Text("HLSL extensions: ");
+		ImGui::Text("HLSL file extensions: ");
 		ImGui::SameLine();
-		ImGui::Indent(settings->CalculateSize(150));
+		float xExtPos = ImGui::GetCursorPosX();
 		static char hlslExtEntry[64] = { 0 };
 		if (ImGui::ListBoxHeader("##optg_hlslexts", ImVec2(settings->CalculateSize(100), settings->CalculateSize(100)))) {
 			for (auto& ext : settings->General.HLSLExtensions)
@@ -305,6 +398,7 @@ namespace ed {
 					strcpy(hlslExtEntry, ext.c_str());
 			ImGui::ListBoxFooter();
 		}
+		ImGui::SetCursorPosX(xExtPos);
 		ImGui::PushItemWidth(settings->CalculateSize(100));
 		ImGui::InputText("##optg_hlslext_inp", hlslExtEntry, 64);
 		ImGui::PopItemWidth();
@@ -329,12 +423,11 @@ namespace ed {
 					break;
 				}
 		}
-		ImGui::Unindent(settings->CalculateSize(150));
 
 		/* VULKAN EXTENSIONS: */
-		ImGui::Text("Vulkan GLSL extensions: ");
+		ImGui::Text("Vulkan GLSL file extensions: ");
 		ImGui::SameLine();
-		ImGui::Indent(settings->CalculateSize(180));
+		xExtPos = ImGui::GetCursorPosX();
 		static char vkExtEntry[64] = { 0 };
 		if (ImGui::ListBoxHeader("##optg_vkexts", ImVec2(settings->CalculateSize(100), settings->CalculateSize(100)))) {
 			for (auto& ext : settings->General.VulkanGLSLExtensions)
@@ -342,6 +435,7 @@ namespace ed {
 					strcpy(vkExtEntry, ext.c_str());
 			ImGui::ListBoxFooter();
 		}
+		ImGui::SetCursorPosX(xExtPos);
 		ImGui::PushItemWidth(settings->CalculateSize(100));
 		ImGui::InputText("##optg_vkext_inp", vkExtEntry, 64);
 		ImGui::PopItemWidth();
@@ -366,7 +460,51 @@ namespace ed {
 					break;
 				}
 		}
-		ImGui::Unindent(settings->CalculateSize(180));
+
+		/* PLUGIN SHADER FILE EXTENSIONS: */
+		const auto& plugins = m_data->Plugins.Plugins();
+		for (IPlugin1* pl : plugins) {
+			int langCount = pl->CustomLanguage_GetCount();
+			for (int i = 0; i < langCount; i++) {
+				std::string langName = pl->CustomLanguage_GetName(i);
+				std::vector<std::string>& extVec = settings->General.PluginShaderExtensions[langName];
+				ImGui::Text("%s file extensions: ", langName.c_str());
+				ImGui::SameLine();
+				xExtPos = ImGui::GetCursorPosX();
+				static char plExtEntry[64] = { 0 };
+				if (ImGui::ListBoxHeader(("##optg_" + langName + "exts").c_str(), ImVec2(settings->CalculateSize(100), settings->CalculateSize(100)))) {
+					for (auto& ext : extVec)
+						if (ImGui::Selectable(ext.c_str()))
+							strcpy(plExtEntry, ext.c_str());
+					ImGui::ListBoxFooter();
+				}
+				ImGui::SetCursorPosX(xExtPos);
+				ImGui::PushItemWidth(settings->CalculateSize(100));
+				ImGui::InputText(("##optg_" + langName + "ext_inp").c_str(), plExtEntry, 64);
+				ImGui::PopItemWidth();
+				ImGui::SameLine();
+				if (ImGui::Button(("ADD##optg_btnadd" + langName + "ext").c_str())) {
+					int exists = -1;
+					std::string hlslExtEntryStr(plExtEntry);
+					for (int i = 0; i < extVec.size(); i++)
+						if (extVec[i] == hlslExtEntryStr) {
+							exists = i;
+							break;
+						}
+					if (exists == -1 && hlslExtEntryStr.size() >= 1)
+						extVec.push_back(hlslExtEntryStr);
+				}
+				ImGui::SameLine();
+				if (ImGui::Button(("REMOVE##optg_btnrem" + langName + "ext").c_str())) {
+					std::string extEntryStr(plExtEntry);
+					for (int i = 0; i < extVec.size(); i++)
+						if (extVec[i] == extEntryStr) {
+							extVec.erase(extVec.begin() + i);
+							break;
+						}
+				}
+			}
+		}
 
 		/* WORKSPACE STUFF */
 		ImGui::NewLine();
@@ -383,12 +521,8 @@ namespace ed {
 		ImGui::PopItemWidth();
 		ImGui::SameLine();
 		if (ImGui::Button("...", ImVec2(-1, 0))) {
-			std::string file;
-			bool success = UIHelper::GetOpenFileDialog(file, "*.ttf;*.otf");
-			if (success) {
-				file = ghc::filesystem::relative(file).generic_string();
-				strcpy(settings->General.Font, file.c_str());
-			}
+			m_dialogPath = settings->General.Font;
+			igfd::ImGuiFileDialog::Instance()->OpenModal("OptionsFontDlg", "Select a font", "Font (*.ttf;*.otf){.ttf,.otf},.*", ".");
 		}
 
 		/* FONT SIZE: */
@@ -460,14 +594,32 @@ namespace ed {
 		Settings* settings = &Settings::Instance();
 
 		/* SMART PREDICTIONS: */
-		ImGui::Text("Smart predictions: ");
+		ImGui::Text("Autocomplete: ");
 		ImGui::SameLine();
 		ImGui::Checkbox("##opte_smart_pred", &settings->Editor.SmartPredictions);
+
+		/* ACTIVE SMART PREDICTIONS: */
+		if (!settings->Editor.SmartPredictions) {
+			ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+		}
+		ImGui::Text("Continuous autocomplete: ");
+		ImGui::SameLine();
+		ImGui::Checkbox("##opte_active_smart_pred", &settings->Editor.ActiveSmartPredictions);
+		if (!settings->Editor.SmartPredictions) {
+			ImGui::PopStyleVar();
+			ImGui::PopItemFlag();
+		}
 
 		/* SHOW WHITESPACE: */
 		ImGui::Text("Show whitespace: ");
 		ImGui::SameLine();
 		ImGui::Checkbox("##opte_show_whitespace", &settings->Editor.ShowWhitespace);
+
+		/* SCROLLBAR MARKERS: */
+		ImGui::Text("Scrollbar markers: ");
+		ImGui::SameLine();
+		ImGui::Checkbox("##opte_scrollbar_markers", &settings->Editor.ScrollbarMarkers);
 
 		/* FONT: */
 		ImGui::Text("Font: ");
@@ -479,10 +631,8 @@ namespace ed {
 		ImGui::PopItemFlag();
 		ImGui::SameLine();
 		if (ImGui::Button("...", ImVec2(-1, 0))) {
-			std::string file;
-			bool success = UIHelper::GetOpenFileDialog(file, "*.ttf;*.otf");
-			if (success)
-				strcpy(settings->Editor.Font, file.c_str());
+			m_dialogPath = settings->Editor.Font;
+			igfd::ImGuiFileDialog::Instance()->OpenModal("OptionsFontDlg", "Select a font", "Font (*.ttf;*.otf){.ttf,.otf},.*", ".");
 		}
 
 		/* FONT SIZE: */
@@ -497,6 +647,11 @@ namespace ed {
 		ImGui::Text("Show function description tooltips: ");
 		ImGui::SameLine();
 		ImGui::Checkbox("##opte_show_functooltips", &settings->Editor.FunctionTooltips);
+
+		/* SYNTAX HIGHLIGHTING: */
+		ImGui::Text("Syntax highlighting: ");
+		ImGui::SameLine();
+		ImGui::Checkbox("##opte_syntax_highlgt", &settings->Editor.SyntaxHighlighting);
 
 		/* AUTO BRACE COMPLETION: */
 		ImGui::Text("Brace completion: ");
@@ -527,6 +682,11 @@ namespace ed {
 		ImGui::Text("Smart indenting: ");
 		ImGui::SameLine();
 		ImGui::Checkbox("##opte_smartindent", &settings->Editor.SmartIndent);
+
+		/* AUTO INDENT ON PASTE: */
+		ImGui::Text("Auto indent on paste: ");
+		ImGui::SameLine();
+		ImGui::Checkbox("##opte_paste_indnet", &settings->Editor.AutoIndentOnPaste);
 
 		/* INSERT SPACES: */
 		ImGui::Text("Insert spaces on tab press: ");
@@ -752,6 +912,7 @@ namespace ed {
 			m_pluginsNotLoaded.erase(m_pluginsNotLoaded.begin() + m_pluginNotLoadedLB);
 
 			m_pluginNotLoadedLB = std::max<int>(0, m_pluginNotLoadedLB - 1);
+			m_pluginRequiresRestart = true;
 		}
 		if (ImGui::Button("<<") && m_pluginLoadedLB < m_pluginsLoaded.size()) {
 			settings->Plugins.NotLoaded.push_back(m_pluginsLoaded[m_pluginLoadedLB]);
@@ -759,6 +920,7 @@ namespace ed {
 			m_pluginsLoaded.erase(m_pluginsLoaded.begin() + m_pluginLoadedLB);
 
 			m_pluginLoadedLB = std::max<int>(0, m_pluginLoadedLB - 1);
+			m_pluginRequiresRestart = true;
 		}
 		ImGui::Unindent(ImGui::GetColumnWidth() / 2 - settings->CalculateSize(20));
 		ImGui::NextColumn();
@@ -771,6 +933,9 @@ namespace ed {
 		ImGui::NextColumn();
 
 		ImGui::Columns(1);
+
+		if (m_pluginRequiresRestart)
+			ImGui::Text("** restart SHADERed **");
 
 		ImGui::Separator();
 		ImGui::NewLine();
@@ -836,7 +1001,7 @@ namespace ed {
 		ImGui::Text("Include directories: ");
 		ImGui::SameLine();
 		ImGui::Indent(settings->CalculateSize(150));
-		static char ipathEntry[MAX_PATH] = { 0 };
+		static char ipathEntry[SHADERED_MAX_PATH] = { 0 };
 		if (ImGui::ListBoxHeader("##optpr_ipaths", ImVec2(0, settings->CalculateSize(250)))) {
 			for (auto& ext : settings->Project.IncludePaths)
 				if (ImGui::Selectable(ext.c_str()))
@@ -845,31 +1010,104 @@ namespace ed {
 		}
 		ImGui::PushItemWidth(settings->CalculateSize(-125));
 		ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-		ImGui::InputText("##optpr_ipath_inp", ipathEntry, MAX_PATH);
+		ImGui::InputText("##optpr_ipath_inp", ipathEntry, SHADERED_MAX_PATH);
 		ImGui::PopItemFlag();
 		ImGui::PopItemWidth();
 		ImGui::SameLine();
-		if (ImGui::Button("ADD##optpr_btnaddext")) {
-			bool exists = false;
-			std::string newIPath = "";
-			bool isAdded = UIHelper::GetOpenDirectoryDialog(newIPath);
-			for (int i = 0; i < settings->Project.IncludePaths.size(); i++)
-				if (settings->Project.IncludePaths[i] == newIPath) {
-					exists = true;
-					break;
-				}
-			if (!exists && isAdded)
-				settings->Project.IncludePaths.push_back(m_data->Parser.GetRelativePath(newIPath));
-		}
+		if (ImGui::Button("ADD##optpr_btnaddext"))
+			igfd::ImGuiFileDialog::Instance()->OpenModal("AddIncludeDirDlg", "Select a directory", nullptr, ".");
 		ImGui::SameLine();
 		if (ImGui::Button("REMOVE##optpr_btnremext")) {
 			std::string glslExtEntryStr(ipathEntry);
 			for (int i = 0; i < settings->Project.IncludePaths.size(); i++)
 				if (settings->Project.IncludePaths[i] == glslExtEntryStr) {
 					settings->Project.IncludePaths.erase(settings->Project.IncludePaths.begin() + i);
+					m_data->Parser.ModifyProject();
 					break;
 				}
 		}
 		ImGui::Unindent(settings->CalculateSize(250));
+	}
+	void OptionsUI::m_renderCodeSnippets()
+	{
+		CodeEditorUI* codeUI = ((CodeEditorUI*)m_ui->Get(ViewID::Code));
+		const auto& snippets = codeUI->GetSnippets();
+
+		ImGui::BeginChild("##optcs_table_container", ImVec2(0, Settings::Instance().CalculateSize(-180)));
+		if (ImGui::BeginTable("##optcs_table", 4, ImGuiTableFlags_BordersInner | ImGuiTableFlags_Resizable)) {
+			ImGui::TableSetupColumn("Language", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("Display", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("Search", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("Snippet", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableAutoHeaders();
+
+			int rowIndex = 0;
+			for (const auto& snippet : snippets) {
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::PushID(rowIndex);
+				if (ImGui::Selectable(snippet.Language.c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
+					strcpy(m_snippetLanguage, snippet.Language.c_str());
+					strcpy(m_snippetDisplay, snippet.Display.c_str());
+					strcpy(m_snippetSearch, snippet.Search.c_str());
+					m_snippetCode.SetText(snippet.Code);
+				}
+				ImGui::PopID();
+				ImGui::TableSetColumnIndex(1); 
+				ImGui::Text(snippet.Display.c_str());
+				ImGui::TableSetColumnIndex(2);
+				ImGui::Text(snippet.Search.c_str());
+				ImGui::TableSetColumnIndex(3);
+				ImGui::Text(snippet.Code.c_str());
+				rowIndex++;
+			}
+			ImGui::EndTable();
+		}
+		ImGui::EndChild();
+
+
+		if (ImGui::BeginTable("##optcs_user", 5, ImGuiTableFlags_BordersInner)) {
+			ImGui::TableSetupColumn("Language", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("Display", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("Search", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("Snippet", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("Controls", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableAutoHeaders();
+
+				ImGui::TableNextRow();
+
+				ImGui::TableSetColumnIndex(0);
+				ImGui::PushItemWidth(Settings::Instance().CalculateSize(100));
+				if (ImGui::BeginCombo("##optcs_lang", m_snippetLanguage)) {
+					if (ImGui::Selectable("HLSL", strcmp(m_snippetLanguage, "HLSL") == 0))
+						strcpy(m_snippetLanguage, "HLSL");
+					if (ImGui::Selectable("GLSL", strcmp(m_snippetLanguage, "GLSL") == 0))
+						strcpy(m_snippetLanguage, "GLSL");
+					if (ImGui::Selectable("*", strcmp(m_snippetLanguage, "*") == 0))
+						strcpy(m_snippetLanguage, "*");
+
+					ImGui::EndCombo();
+				}
+				ImGui::PopItemWidth();
+				ImGui::TableSetColumnIndex(1);
+				ImGui::PushItemWidth(Settings::Instance().CalculateSize(100));
+				ImGui::InputText("##optcs_display", m_snippetDisplay, 32);
+				ImGui::PopItemWidth();
+				ImGui::TableSetColumnIndex(2);
+				ImGui::PushItemWidth(Settings::Instance().CalculateSize(100));
+				ImGui::InputText("##optcs_search", m_snippetSearch, 32);
+				ImGui::PopItemWidth();
+				ImGui::TableSetColumnIndex(3);
+				ImGui::PushFont(codeUI->GetImFont());
+				m_snippetCode.Render("##optcs_code");
+				ImGui::PopFont();
+				ImGui::TableSetColumnIndex(4);
+				if (ImGui::Button("ADD / UPDATE"))
+					codeUI->AddSnippet(m_snippetLanguage, m_snippetDisplay, m_snippetSearch, m_snippetCode.GetText());
+				if (ImGui::Button("REMOVE"))
+					codeUI->RemoveSnippet(m_snippetLanguage, m_snippetDisplay);
+
+			ImGui::EndTable();
+		}
 	}
 }

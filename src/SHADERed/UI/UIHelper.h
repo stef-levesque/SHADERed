@@ -11,12 +11,16 @@
 #include <GL/gl.h>
 #endif
 
+struct spvm_member;
+struct spvm_result;
+struct spvm_state;
+
 namespace ed {
+	class InterfaceManager;
+
 	class UIHelper {
 	public:
-		static bool GetOpenDirectoryDialog(std::string& outPath);
-		static bool GetOpenFileDialog(std::string& outPath, const std::string& files = "");
-		static bool GetSaveFileDialog(std::string& outPath, const std::string& files = "");
+		static int MessageBox_YesNoCancel(void* window, const std::string& msg);
 
 		static void ShellOpen(const std::string& path);
 

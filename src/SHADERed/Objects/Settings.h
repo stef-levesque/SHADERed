@@ -1,6 +1,7 @@
 #pragma once
 #include <SHADERed/Options.h>
 #include <glm/glm.hpp>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -14,16 +15,21 @@ namespace ed {
 		float DPIScale;	 // shouldn't be changed by users
 		float TempScale; // copy this value to DPIScale on "Ok" button press
 		std::string Theme;
+		std::string LinuxHomeDirectory;
 
 		struct strGeneral {
 			bool VSync;
-			// std::string Language;	// [TODO] Not implemented
 			bool AutoOpenErrorWindow;
 			bool Toolbar;
 			bool Recovery; // [TODO] Not implemented
 			bool CheckUpdates;
+			bool CheckPluginUpdates;
 			bool RecompileOnFileChange;
 			bool AutoRecompile;
+			bool AutoUniforms;
+			bool AutoUniformsPin;
+			bool AutoUniformsFunction;
+			bool AutoUniformsDelete;
 			bool ReopenShaders;
 			bool UseExternalEditor;
 			bool OpenShadersOnDblClk;
@@ -33,17 +39,19 @@ namespace ed {
 			bool StreamLogs;
 			bool PipeLogsToTerminal;
 			std::string StartUpTemplate;
-			char Font[MAX_PATH];
+			char Font[SHADERED_MAX_PATH];
 			int FontSize;
 			bool AutoScale;
 			bool Tips;
 			std::vector<std::string> HLSLExtensions;
 			std::vector<std::string> VulkanGLSLExtensions;
+			std::unordered_map<std::string, std::vector<std::string>> PluginShaderExtensions;
 		} General;
 
 		struct strEditor {
 			bool SmartPredictions;
-			char Font[MAX_PATH];
+			bool ActiveSmartPredictions;
+			char Font[SHADERED_MAX_PATH];
 			int FontSize;
 			bool ShowWhitespace;
 			bool HiglightCurrentLine;
@@ -52,8 +60,11 @@ namespace ed {
 			bool HorizontalScroll;
 			bool AutoBraceCompletion;
 			bool SmartIndent;
+			bool AutoIndentOnPaste;
 			bool InsertSpaces;
 			bool FunctionTooltips;
+			bool SyntaxHighlighting;
+			bool ScrollbarMarkers;
 			int TabSize;
 		} Editor;
 
@@ -109,5 +120,6 @@ namespace ed {
 
 	private:
 		void m_parseExt(const std::string& str, std::vector<std::string>& extcontainer);
+		void m_parsePluginExt(const std::string& str, std::unordered_map<std::string, std::vector<std::string>>& extcontainer);
 	};
 }

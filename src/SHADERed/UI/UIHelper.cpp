@@ -1,10 +1,10 @@
+#include <SHADERed/UI/UIHelper.h>
 #include <SHADERed/Objects/Logger.h>
 #include <SHADERed/Objects/Names.h>
-#include <SHADERed/UI/UIHelper.h>
 
 #include <imgui/imgui.h>
 #include <imgui_markdown/imgui_markdown.h>
-#include <tinyfiledialogs/tinyfiledialogs.h>
+#include <SDL2/SDL_messagebox.h>
 #include <clocale>
 #include <iomanip>
 #include <sstream>
@@ -12,41 +12,6 @@
 #define HARRAYSIZE(a) (sizeof(a) / sizeof(*a))
 
 namespace ed {
-	bool UIHelper::GetOpenDirectoryDialog(std::string& outPath)
-	{
-		const char* selectionLoc = tinyfd_selectFolderDialog("Select folder", NULL);
-
-		if (selectionLoc == nullptr)
-			return false;
-
-		outPath = selectionLoc;
-
-		return true;
-	}
-	bool UIHelper::GetOpenFileDialog(std::string& outPath, const std::string& files)
-	{
-		const char* filters = files.c_str();
-		const char* openLoc = tinyfd_openFileDialog("Open", NULL, files.empty() ? 0 : 1, files.empty() ? NULL : &filters, NULL, 0);
-
-		if (openLoc == nullptr)
-			return false;
-
-		outPath = openLoc;
-
-		return true;
-	}
-	bool UIHelper::GetSaveFileDialog(std::string& outPath, const std::string& files)
-	{
-		const char* filters = files.c_str();
-		const char* saveLoc = tinyfd_saveFileDialog("Save", NULL, files.empty() ? 0 : 1, files.empty() ? NULL : &filters, NULL);
-
-		if (saveLoc == nullptr)
-			return false;
-
-		outPath = saveLoc;
-		
-		return true;
-	}
 	void UIHelper::ShellOpen(const std::string& path)
 	{
 #if defined(__APPLE__)
@@ -56,6 +21,30 @@ namespace ed {
 #elif defined(_WIN32)
 		ShellExecuteA(0, 0, path.c_str(), 0, 0, SW_SHOW);
 #endif
+	}
+	int UIHelper::MessageBox_YesNoCancel(void* window, const std::string& msg)
+	{
+		const SDL_MessageBoxButtonData buttons[] = {
+			{ SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 2, "CANCEL" },
+			{ /* .flags, .buttonid, .text */ 0, 1, "NO" },
+			{ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 0, "YES" },
+		};
+		const SDL_MessageBoxData messageboxdata = {
+			SDL_MESSAGEBOX_INFORMATION, /* .flags */
+			(SDL_Window*)window,		/* .window */
+			"SHADERed",					/* .title */
+			msg.c_str(),				/* .message */
+			SDL_arraysize(buttons),		/* .numbuttons */
+			buttons,					/* .buttons */
+			NULL						/* .colorScheme */
+		};
+		int buttonID;
+		if (SDL_ShowMessageBox(&messageboxdata, &buttonID) < 0) {
+			Logger::Get().Log("Failed to open message box.", true);
+			return -1;
+		}
+
+		return buttonID;
 	}
 	bool UIHelper::CreateBlendOperatorCombo(const char* name, GLenum& opValue)
 	{
@@ -273,7 +262,7 @@ namespace ed {
 
 		return ret;
 	}
-	
+
 	void MarkdownLinkCallback(ImGui::MarkdownLinkCallbackData data_)
 	{
 		std::string url(data_.link, data_.linkLength);

@@ -85,6 +85,7 @@ You can also check this list too: [link](https://shadered.org/features.php).
   * [Hugo Locurcio](https://hugo.pro)
   * Senthil Kumaran Rajasekaran
   * [Vladimir Alyamkin](https://alyamkin.com/)
+  * [Wogos Media](http://theWogos.com/)
 
 ## Support
 Support the development of this project on Patreon: [<img width="120" src="https://c5.patreon.com/external/logo/become_a_patron_button@2x.png">](https://www.patreon.com/dfranx)
@@ -144,6 +145,12 @@ cmake .
 make
 ```
 
+**NOTE:** If you want immediate mode and related features, turn on BUILD_IMMEDIATE_MODE flag.
+```
+cmake -DBUILD_IMMEDIATE_MODE=ON .
+make
+```
+
 **NOTE:** If you dont have SFML 2.5 installed on your machine, run these commands:
 ```
 cmake -DUSE_FINDSFML=ON .
@@ -164,6 +171,7 @@ Run:
 ```
 
 ### macOS
+**NOTE: macOS is not officially supported by me + some features are not supported on macOS**
 
 Install all the libraries that are needed:
 
@@ -193,7 +201,7 @@ Run:
 
 ### Windows
 1. Install SDL2, SFML, GLEW & GLM through your favourite package manager (I recommend vcpkg)
-2. Run cmake-gui and set CMAKE_TOOLCHAIN_FILE variable
+2. Run cmake-gui and set CMAKE_TOOLCHAIN_FILE variable (and turn on BUILD_IMMEDIATE_MODE flag if you want to have immediate mode and related features)
 3. Press Configure and then Generate if no errors occured
 4. Open the .sln and build the project!
 
@@ -203,6 +211,8 @@ detailed steps on how to do these things.
 
 ## Used by
 [<img width="250" src="./Misc/Logo/arkaos.png">](https://www.arkaos.com/)
+
+[<img height="100" src="./Misc/Logo/wogos.png">](https://www.theWogos.com/)
 
 ## Screenshots
 ![](./Misc/Screenshots/screen1.jpg)
@@ -216,14 +226,21 @@ Send your own screenshots [here](https://github.com/dfranx/SHADERed/issues/8)!
 
 ## Dependencies
 This project uses:
- - [ocornut/imgui](https://github.com/ocornut/imgui/tree/docking) (docking branch)
+ - [assimp/assimp](https://github.com/assimp/assimp)
+ - [KhronosGroup/glslang](https://github.com/KhronosGroup/glslang)
+ - [ocornut/imgui](https://github.com/ocornut/imgui/tree/docking) (docking + tables branch)
+ - [juliettef/imgui_markdown](https://github.com/juliettef/imgui_markdown)
  - [BalazsJako/ImGuiColorTextEdit](https://github.com/BalazsJako/ImGuiColorTextEdit)
- - [zeux/pugixml](https://github.com/zeux/pugixml)
  - [benhoyt/inih](https://github.com/benhoyt/inih)
- - [KhronosGroup/glslangValidator](https://github.com/KhronosGroup/glslang)
+ - [zeux/pugixml](https://github.com/zeux/pugixml)
+ - [dfranx/ShaderExpressionParser](https://github.com/dfranx/ShaderExpressionParser)
  - [KhronosGroup/SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)
+ - [KhronosGroup/SPIRV-Headers](https://github.com/KhronosGroup/SPIRV-Headers)
+ - [KhronosGroup/SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools)
+ - [dfranx/SPIRV-VM](https://github.com/dfranx/SPIRV-VM)
+ - [rAzoR8/SpvGenTwo](https://github.com/rAzoR8/SpvGenTwo)
  - [nothings/stb](https://github.com/nothings/stb)
- - [mlabbe/nativefiledialog](https://github.com/mlabbe/nativefiledialog)
+ - [aiekick/ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog)
 
 Some of the examples in the `examples` directory were taken from AMD's Render Monkey, so credits to AMD.
 

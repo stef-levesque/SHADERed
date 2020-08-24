@@ -5,6 +5,7 @@
 #include <SHADERed/Objects/Settings.h>
 #include <SHADERed/Objects/ShaderLanguage.h>
 #include <SHADERed/Objects/ShaderStage.h>
+#include <SHADERed/Objects/SPIRVParser.h>
 #include <SHADERed/UI/Tools/StatsPage.h>
 #include <SHADERed/UI/UIView.h>
 #include <imgui/examples/imgui_impl_opengl3.h>
@@ -15,6 +16,13 @@
 #include <ghc/filesystem.hpp>
 
 namespace ed {
+	struct CodeSnippet {
+		std::string Language;
+		std::string Display;
+		std::string Search;
+		std::string Code;
+	};
+
 	class CodeEditorUI : public UIView {
 	public:
 		CodeEditorUI(GUIManager* ui, ed::InterfaceManager* objects, const std::string& name = "", bool visible = false);
@@ -22,6 +30,14 @@ namespace ed {
 
 		virtual void OnEvent(const SDL_Event& e);
 		virtual void Update(float delta);
+
+		void LoadSnippets();
+		void SaveSnippets();
+		void AddSnippet(const std::string& lang, const std::string& display, const std::string& search, const std::string& code);
+		void RemoveSnippet(const std::string& lang, const std::string& display);
+		inline const std::vector<CodeSnippet>& GetSnippets() { return m_snippets; }
+
+		void UpdateAutoRecompileItems();
 
 		void StopThreads();
 		void StopDebugging();
@@ -31,12 +47,14 @@ namespace ed {
 		void Open(PipelineItem* item, ed::ShaderStage stage);
 		void OpenPluginCode(PipelineItem* item, const char* filepath, int id);
 		TextEditor* Get(PipelineItem* item, ed::ShaderStage stage);
+		TextEditor* Get(const std::string& path);
 
 		void SetTheme(const TextEditor::Palette& colors);
 		void SetFont(const std::string& filename, int size = 15);
-		void SetAutoRecompile(bool autorecompile);
 		void SetTrackFileChanges(bool track);
 		void ApplySettings();
+
+		void FillAutocomplete(TextEditor* tEdit, const SPIRVParser& spv, bool colorize = true);
 
 		inline bool HasFocus() { return m_selectedItem != -1; }
 		inline bool NeedsFontUpdate() const { return m_fontNeedsUpdate; }
@@ -49,8 +67,7 @@ namespace ed {
 			else
 				m_font = ImGui::GetIO().Fonts->Fonts[0];
 		}
-
-		void UpdateAutoRecompileItems();
+		inline ImFont* GetImFont() { return m_font; }
 
 		inline bool TrackedFilesNeedUpdate() { return m_trackUpdatesNeeded > 0; }
 		inline void EmptyTrackedFiles() { m_trackUpdatesNeeded = 0; }
@@ -62,12 +79,34 @@ namespace ed {
 
 		bool RequestedProjectSave;
 
+		void ChangePluginShaderEditor(IPlugin1* plugin, int langID, int editorID);
+
 	private:
 		void m_setupShortcuts();
 		void m_loadEditorShortcuts(TextEditor* editor);
 
-		TextEditor::LanguageDefinition m_buildLanguageDefinition(IPlugin* plugin, ShaderStage stage, const char* itemType, const char* filePath);
+		TextEditor::LanguageDefinition m_buildLanguageDefinition(IPlugin1* plugin, int languageID);
 		void m_applyBreakpoints(TextEditor* editor, const std::string& path);
+
+		std::vector<CodeSnippet> m_snippets;
+
+		struct PluginShaderEditor {
+			PluginShaderEditor()
+			{
+				Plugin = nullptr;
+				LanguageID = -1;
+				ID = -1;
+			}
+			PluginShaderEditor(IPlugin1* pl, int langID, int id)
+			{
+				Plugin = pl;
+				LanguageID = langID;
+				ID = id;
+			}
+			IPlugin1* Plugin;
+			int LanguageID;
+			int ID;
+		};
 
 		// code editor font
 		ImFont* m_font;
@@ -81,7 +120,10 @@ namespace ed {
 		std::vector<StatsPage> m_stats;
 		std::vector<std::string> m_paths;
 		std::vector<ShaderStage> m_shaderStage;
+		std::vector<PluginShaderEditor> m_pluginEditor;
 		std::deque<bool> m_editorOpen;
+
+		int m_editorSaveRequestID;
 
 		bool m_fontNeedsUpdate;
 		std::string m_fontFilename;
@@ -95,37 +137,10 @@ namespace ed {
 		int m_selectedItem;
 
 		// auto recompile
-		void m_autoRecompiler();
-		bool m_autoRecompile;
-		std::thread* m_autoRecompileThread;
-		std::atomic<bool> m_autoRecompilerRunning, m_autoRecompileRequest;
-		std::vector<ed::MessageStack::Message> m_autoRecompileCachedMsgs;
-		std::shared_mutex m_autoRecompilerMutex;
-		struct AutoRecompilerItemInfo {
-			AutoRecompilerItemInfo()
-			{
-				VS = PS = GS = CS = "";
-				VS_SLang = PS_SLang = GS_SLang = CS_SLang = ShaderLanguage::GLSL;
-
-				SPass = nullptr;
-				CPass = nullptr;
-			}
-			std::string VS, PS, GS;
-			ShaderLanguage VS_SLang, PS_SLang, GS_SLang;
-			pipe::ShaderPass* SPass;
-
-			std::string CS;
-			ShaderLanguage CS_SLang;
-			pipe::ComputePass* CPass;
-
-			std::string AS;
-			pipe::AudioPass* APass;
-
-			std::string PluginCode;
-			int PluginID;
-			pipe::PluginItemData* PluginData;
-		};
-		std::unordered_map<std::string, AutoRecompilerItemInfo> m_ariiList;
+		bool m_contentChanged;
+		std::vector<TextEditor*> m_changedEditors;
+		std::vector<PluginShaderEditor*> m_changedPluginEditors;
+		eng::Timer m_lastAutoRecompile;
 
 		// all the variables needed for the file change notifications
 		void m_trackWorker();

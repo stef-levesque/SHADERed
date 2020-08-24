@@ -22,6 +22,7 @@
 [submodule "libs/SPIRV-VM"]
 	path = libs/SPIRV-VM
 	url = https://github.com/dfranx/SPIRV-VM.git
+	ignore = dirty
 [submodule "libs/spirv-tools"]
 	path = libs/spirv-tools
 	url = https://github.com/KhronosGroup/SPIRV-Tools.git
@@ -30,3 +31,9 @@
 	path = libs/spirv-headers
 	url = https://github.com/KhronosGroup/SPIRV-Headers
 	ignore = dirty
+[submodule "libs/ShaderExpressionParser"]
+	path = libs/ShaderExpressionParser
+	url = https://github.com/dfranx/ShaderExpressionParser
+[submodule "libs/SpvGenTwo"]
+	path = libs/SpvGenTwo
+	url = https://github.com/dfranx/SpvGenTwo

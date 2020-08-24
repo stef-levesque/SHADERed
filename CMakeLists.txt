@@ -9,6 +9,8 @@ if(${DEBUG})
 	set(CMAKE_BUILD_TYPE Debug)
 endif()
 
+option(BUILD_IMMEDIATE_MODE "Build the immediate mode related features" OFF)
+
 # source code
 set(SOURCES
 	main.cpp
@@ -20,13 +22,11 @@ set(SOURCES
 	src/SHADERed/InterfaceManager.cpp
 
 # objects:
-	src/SHADERed/Objects/PluginAPI/PluginManager.cpp
 	src/SHADERed/Objects/Export/ExportCPP.cpp
 	src/SHADERed/Objects/ArcBallCamera.cpp
 	src/SHADERed/Objects/AudioAnalyzer.cpp
 	src/SHADERed/Objects/AudioShaderStream.cpp
 	src/SHADERed/Objects/CameraSnapshots.cpp
-	src/SHADERed/Objects/ChangelogFetcher.cpp
 	src/SHADERed/Objects/CommandLineOptionParser.cpp
 	src/SHADERed/Objects/DefaultState.cpp
 	src/SHADERed/Objects/DebugInformation.cpp
@@ -45,10 +45,11 @@ set(SOURCES
 	src/SHADERed/Objects/RenderEngine.cpp
 	src/SHADERed/Objects/Settings.cpp
 	src/SHADERed/Objects/ShaderVariableContainer.cpp
+	src/SHADERed/Objects/SPIRVParser.cpp
 	src/SHADERed/Objects/SystemVariableManager.cpp
 	src/SHADERed/Objects/ThemeContainer.cpp
-	src/SHADERed/Objects/TipFetcher.cpp
-	src/SHADERed/Objects/UpdateChecker.cpp
+	src/SHADERed/Objects/PluginManager.cpp
+	src/SHADERed/Objects/WebAPI.cpp
 
 # UI Tools
 	src/SHADERed/UI/Tools/CubemapPreview.cpp
@@ -56,6 +57,7 @@ set(SOURCES
 	src/SHADERed/UI/Tools/StatsPage.cpp
 	src/SHADERed/UI/Tools/VariableValueEdit.cpp
 	src/SHADERed/UI/Tools/DebuggerOutline.cpp
+	src/SHADERed/UI/Tools/NotificationSystem.cpp
 
 # UI Debug
 	src/SHADERed/UI/Debug/BreakpointListUI.cpp
@@ -98,8 +100,10 @@ set(SOURCES
 	libs/SPIRVCross/spirv_cross_parsed_ir.cpp
 	libs/SPIRVCross/spirv_glsl.cpp
 	libs/SPIRVCross/spirv_parser.cpp
-	libs/tinyfiledialogs/tinyfiledialogs.c
 	libs/pugixml/src/pugixml.cpp
+	libs/ShaderExpressionParser/Parser.cpp
+	libs/ShaderExpressionParser/Tokenizer.cpp
+	libs/ImGuiFileDialog/ImGuiFileDialog.cpp
 )
 
 
@@ -138,6 +142,15 @@ find_package(GLM REQUIRED)
 
 # sfml audio
 find_package(SFML COMPONENTS system audio network)
+
+# SpvGenTwo
+if(BUILD_IMMEDIATE_MODE)
+	set(SOURCES
+		"${SOURCES}"
+		src/SHADERed/Objects/Debug/ExpressionCompiler.cpp
+	)
+	add_subdirectory(libs/SpvGenTwo)
+endif()
 
 # assimp
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Static lib" FORCE)
@@ -184,6 +197,11 @@ set_target_properties(SHADERed PROPERTIES
     CXX_STANDARD_REQUIRED YES
 )
 
+# preprocessor
+if (BUILD_IMMEDIATE_MODE)
+	target_compile_definitions(SHADERed PRIVATE BUILD_IMMEDIATE_MODE)
+endif()
+
 # include directories
 target_include_directories(SHADERed PRIVATE ${SDL2_INCLUDE_DIRS} ${GLM_INCLUDE_DIRS} ${GLEW_INCLUDE_DIRS} ${OPENGL_INCLUDE_DIRS} ${ASSIMP_INCLUDE_DIR} ${SFML_INCLUDE_DIR})
 target_include_directories(SHADERed PRIVATE src libs libs/glslang libs/SPIRV-VM/inc)
@@ -191,8 +209,13 @@ if (NOT WIN32)
 	target_include_directories(SHADERed PRIVATE ${GTK_INCLUDE_DIRS})
 endif()
 
-# link libraries
+# link libraries 
 target_link_libraries(SHADERed ${OPENGL_LIBRARIES} ${GLM_LIBRARY_DIRS} glslang SPIRV SPIRVVM assimp::assimp)
+
+# link SpvGenTwo
+if (BUILD_IMMEDIATE_MODE)
+	target_link_libraries(SHADERed SpvGenTwoLib SpvGenTwoCommon)
+endif()
 
 # link sfml
 if(${USE_FINDSFML})
@@ -207,7 +230,7 @@ if(WIN32)
 
 elseif(UNIX AND NOT APPLE)
 	# link linux libraries
-	target_link_libraries(SHADERed ${GLEW_LIBRARIES} ${SDL2_LIBRARIES} ${GTK_LIBRARIES} ${CMAKE_DL_LIBS})
+	target_link_libraries(SHADERed ${GLEW_LIBRARIES} ${SDL2_LIBRARIES} ${GTK_LIBRARIES} ${CMAKE_DL_LIBS} stdc++fs)
 elseif(APPLE)
 	target_link_libraries(SHADERed GLEW::GLEW ${SDL2_LIBRARIES} ${GTK_LIBRARIES} ${CMAKE_DL_LIBS})
 endif()

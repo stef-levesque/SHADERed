@@ -125,6 +125,20 @@ namespace ed {
 				}
 			}
 		});
+		KeyboardShortcuts::Instance().SetCallback("Preview.ToggleCursorVisibility", [=]() {
+			m_mouseVisible = !m_mouseVisible;
+		});
+		KeyboardShortcuts::Instance().SetCallback("Preview.ToggleMouseLock", [=]() {
+			m_mouseLock = !m_mouseLock;
+		});
+		KeyboardShortcuts::Instance().SetCallback("Preview.ToggleTimePause", [=]() {
+			m_pauseTime = !m_pauseTime;
+			if (m_pauseTime)
+				SystemVariableManager::Instance().GetTimeClock().Pause();
+			else
+				SystemVariableManager::Instance().GetTimeClock().Resume();
+		});
+
 	}
 	void PreviewUI::OnEvent(const SDL_Event& e)
 	{
@@ -160,6 +174,14 @@ namespace ed {
 			}
 
 			m_zoom.Drag();
+
+			// mouse visibility
+			if (!m_mouseVisible && m_fullWindowFocus) {
+				if (m_mousePos.x >= 0.0f && m_mousePos.x <= 1.0f && m_mousePos.y >= 0.0f && m_mousePos.y <= 1.0f)
+					SDL_ShowCursor(0);
+				else
+					SDL_ShowCursor(1);
+			}
 		} else if (e.type == SDL_MOUSEBUTTONUP) {
 			SDL_CaptureMouse(SDL_FALSE);
 			m_startWrap = false;
@@ -172,6 +194,15 @@ namespace ed {
 			}
 
 			m_zoom.EndMouseAction();
+		} else if (e.type == SDL_KEYDOWN) {
+			if (e.key.keysym.sym == SDLK_ESCAPE) {
+				m_mouseVisible = true;
+				m_mouseLock = false;
+			}
+		} else if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
+			m_fullWindowFocus = true;
+		} else if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+			m_fullWindowFocus = false;
 		}
 	}
 	void PreviewUI::Pick(PipelineItem* item, bool add)
@@ -275,8 +306,10 @@ namespace ed {
 
 		bool useFpsLimit = !capWholeApp && m_fpsLimit > 0 && m_elapsedTime >= 1.0f / m_fpsLimit;
 		if (capWholeApp || m_fpsLimit <= 0 || useFpsLimit) {
-			if (!paused)
+			if (!paused) {
 				renderer->Render(imageSize.x, imageSize.y);
+				m_data->Objects.Update(delta);
+			}
 
 			float fps = m_fpsTimer.Restart();
 			if (m_fpsUpdateTime > FPS_UPDATE_RATE) {
@@ -287,10 +320,12 @@ namespace ed {
 			m_elapsedTime -= (1 / m_fpsLimit) * useFpsLimit + (delta * !useFpsLimit);
 		}
 
-		if (capWholeApp && 1000 / delta > m_fpsLimit)
+		if (capWholeApp && m_fpsLimit > 0 && 1000 / delta > m_fpsLimit)
 			std::this_thread::sleep_for(std::chrono::milliseconds(1000 / (int)m_fpsLimit - (int)(1000 * delta)));
 
 		GLuint rtView = renderer->GetTexture();
+		
+		m_imgPosition = ImGui::GetCursorScreenPos();
 
 		// display the image on the imgui window
 		const glm::vec2& zPos = m_zoom.GetZoomPosition();
@@ -388,6 +423,9 @@ namespace ed {
 						ot = &obj->Position;
 						os = &obj->Scale;
 						orot = &obj->Rotation;
+					} else if (m_picks[i]->Type == PipelineItem::ItemType::PluginItem) {
+						pipe::PluginItemData* obj = (pipe::PluginItemData*)m_picks[i]->Data;
+						obj->Owner->PipelineItem_ApplyGizmoTransform(obj->Type, obj->PluginData, glm::value_ptr(t), glm::value_ptr(s), glm::value_ptr(r));
 					}
 
 					if (ot != nullptr)
@@ -438,6 +476,26 @@ namespace ed {
 						m_buildBoundingBox();
 					} else if (obj->Rotation != m_tempRota) {
 						m_prevRota = m_tempRota = obj->Rotation;
+						m_buildBoundingBox();
+					}
+				} else if (m_picks[0]->Type == PipelineItem::ItemType::PluginItem) {
+					pipe::PluginItemData* obj = (pipe::PluginItemData*)m_picks[0]->Data;
+					
+					float objPositionPtr[3], objRotationPtr[3], objScalePtr[3];
+					obj->Owner->PipelineItem_GetTransform(obj->Type, obj->PluginData, objPositionPtr, objRotationPtr, objScalePtr);
+
+					glm::vec3 objPosition = glm::make_vec3(objPositionPtr),
+							  objRotation = glm::make_vec3(objRotationPtr),
+							  objScale = glm::make_vec3(objScalePtr);
+
+					if (objPosition != m_tempTrans) {
+						m_prevTrans = m_tempTrans = objPosition;
+						m_buildBoundingBox();
+					} else if (objScale != m_tempScale) {
+						m_prevScale = m_tempScale = objScale;
+						m_buildBoundingBox();
+					} else if (objRotation != m_tempRota) {
+						m_prevRota = m_tempRota = objRotation;
 						m_buildBoundingBox();
 					}
 				}
@@ -552,26 +610,33 @@ namespace ed {
 		}
 
 		// mouse wrapping
-		if (m_startWrap) {
+		if (m_startWrap || (m_mouseLock && m_fullWindowFocus)) {
 			int ptX, ptY;
 			SDL_GetMouseState(&ptX, &ptY);
 
 			// screen space position
-			glm::vec2 s = m_mousePos;
+			bool needsXAdjust = m_ui->IsPerformanceMode();
+			bool needsYAdjust = needsXAdjust && !statusbar;
+
+			ImVec2 mouseStart = ImGui::GetWindowContentRegionMin();
+			mouseStart.x += ImGui::GetWindowPos().x;
+			mouseStart.y += ImGui::GetWindowPos().y + ImGui::GetScrollY() + !needsXAdjust * ImGui::GetStyle().FramePadding.y;
 
 			bool wrappedMouse = false;
-			const float mPercent = 0.00f;
-			if (s.x < mPercent) {
-				ptX += imageSize.x * (1 - mPercent);
+			const float mPercentX = needsXAdjust ? 0.005f : 0.00f;
+			const float mPercentYTop = 0.00f;
+			const float mPercentYBottom = needsYAdjust ? 0.005f : 0.00f;
+			if (m_mousePos.x < mPercentX) {
+				ptX = mouseStart.x + imageSize.x * (1 - mPercentX) - 2;
 				wrappedMouse = true;
-			} else if (s.x > 1 - mPercent) {
-				ptX -= imageSize.x * (1 - mPercent);
+			} else if (m_mousePos.x > 1 - mPercentX) {
+				ptX = mouseStart.x + imageSize.x * mPercentX + 2;
 				wrappedMouse = true;
-			} else if (s.y > 1 - mPercent) {
-				ptY += imageSize.y * (1 - mPercent);
+			} else if (m_mousePos.y > 1 - mPercentYTop) {
+				ptY = mouseStart.y + imageSize.y * (1 - mPercentYTop) - 2;
 				wrappedMouse = true;
-			} else if (s.y < mPercent) {
-				ptY -= imageSize.y * (1 - mPercent);
+			} else if (m_mousePos.y < mPercentYBottom) {
+				ptY = mouseStart.y + imageSize.y * mPercentYBottom + 2;
 				wrappedMouse = true;
 			}
 
@@ -742,45 +807,55 @@ namespace ed {
 
 	void PreviewUI::m_renderStatusbar(float width, float height)
 	{
+		bool isItemListVisible = width >= Settings::Instance().CalculateSize(675);
+		bool isZoomVisible = width >= Settings::Instance().CalculateSize(565);
+		bool isTimeVisible = width >= Settings::Instance().CalculateSize(445);
+		bool areControlsVisible = width >= Settings::Instance().CalculateSize(330);
+
+		int offset = (-100 * !isZoomVisible) + (-100 * !isTimeVisible);
+
 		float FPS = 1.0f / m_fpsDelta;
 		ImGui::Separator();
 		ImGui::Text("FPS: %.2f", FPS);
-		ImGui::SameLine();
 
-		ImGui::SameLine(Settings::Instance().CalculateSize(120));
-		ImGui::Text("Time: %.2f", SystemVariableManager::Instance().GetTime());
-		ImGui::SameLine();
+		if (isTimeVisible) {
+			ImGui::SameLine(Settings::Instance().CalculateSize(120));
+			ImGui::Text("Time: %.2f", SystemVariableManager::Instance().GetTime());
+		}
 
-		ImGui::SameLine(Settings::Instance().CalculateSize(240));
-		ImGui::Text("Zoom: %d%%", (int)((1.0f / m_zoom.GetZoomSize().x) * 100.0f));
-		ImGui::SameLine();
+		if (isZoomVisible) {
+			ImGui::SameLine(Settings::Instance().CalculateSize(240));
+			ImGui::Text("Zoom: %d%%", (int)((1.0f / m_zoom.GetZoomSize().x) * 100.0f));
+		}
 
-		ImGui::SameLine(Settings::Instance().CalculateSize(340));
-		if (m_pickMode == 0) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-		if (ImGui::Button("P##pickModePos", ImVec2(BUTTON_SIZE, BUTTON_SIZE)) && m_pickMode != 0) {
-			m_pickMode = 0;
-			m_gizmo.SetMode(m_pickMode);
-		} else if (m_pickMode == 0)
-			ImGui::PopStyleColor();
-		ImGui::SameLine();
+		if (areControlsVisible) {
+			ImGui::SameLine(Settings::Instance().CalculateSize(340 + offset));
+			if (m_pickMode == 0) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+			if (ImGui::Button("P##pickModePos", ImVec2(BUTTON_SIZE, BUTTON_SIZE)) && m_pickMode != 0) {
+				m_pickMode = 0;
+				m_gizmo.SetMode(m_pickMode);
+			} else if (m_pickMode == 0)
+				ImGui::PopStyleColor();
 
-		if (m_pickMode == 1) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-		if (ImGui::Button("S##pickModeScl", ImVec2(BUTTON_SIZE, BUTTON_SIZE)) && m_pickMode != 1) {
-			m_pickMode = 1;
-			m_gizmo.SetMode(m_pickMode);
-		} else if (m_pickMode == 1)
-			ImGui::PopStyleColor();
-		ImGui::SameLine();
+			ImGui::SameLine();
+			if (m_pickMode == 1) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+			if (ImGui::Button("S##pickModeScl", ImVec2(BUTTON_SIZE, BUTTON_SIZE)) && m_pickMode != 1) {
+				m_pickMode = 1;
+				m_gizmo.SetMode(m_pickMode);
+			} else if (m_pickMode == 1)
+				ImGui::PopStyleColor();
 
-		if (m_pickMode == 2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-		if (ImGui::Button("R##pickModeRot", ImVec2(BUTTON_SIZE, BUTTON_SIZE)) && m_pickMode != 2) {
-			m_pickMode = 2;
-			m_gizmo.SetMode(m_pickMode);
-		} else if (m_pickMode == 2)
-			ImGui::PopStyleColor();
-		ImGui::SameLine();
+			ImGui::SameLine();
+			if (m_pickMode == 2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+			if (ImGui::Button("R##pickModeRot", ImVec2(BUTTON_SIZE, BUTTON_SIZE)) && m_pickMode != 2) {
+				m_pickMode = 2;
+				m_gizmo.SetMode(m_pickMode);
+			} else if (m_pickMode == 2)
+				ImGui::PopStyleColor();
+		}
 
-		if (m_picks.size() != 0) {
+		ImGui::SameLine();
+		if (m_picks.size() != 0 && isItemListVisible) {
 			ImGui::SameLine(0, Settings::Instance().CalculateSize(20));
 			ImGui::Text("Picked: ");
 
@@ -801,15 +876,15 @@ namespace ed {
 			ImGui::SameLine();
 		}
 
-		/* PAUSE BUTTON */
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-
 		float pauseStartX = (width - ((ICON_BUTTON_WIDTH * 2) + (BUTTON_INDENT * 1))) / 2;
 		if (ImGui::GetCursorPosX() >= pauseStartX - 100)
 			ImGui::SameLine();
 		else
 			ImGui::SetCursorPosX(pauseStartX);
 
+
+		/* PAUSE BUTTON */
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
 		if (ImGui::Button(m_data->Renderer.IsPaused() ? UI_ICON_PLAY : UI_ICON_PAUSE, ImVec2(ICON_BUTTON_WIDTH, BUTTON_SIZE))) {
 			m_data->Renderer.Pause(!m_data->Renderer.IsPaused());
 			m_data->Objects.Pause(m_data->Renderer.IsPaused());
@@ -914,7 +989,7 @@ namespace ed {
 				pipe::PluginItemData* pldata = (pipe::PluginItemData*)item->Data;
 
 				float minPos[3], maxPos[3];
-				pldata->Owner->GetPipelineItemBoundingBox(item->Name, minPos, maxPos);
+				pldata->Owner->PipelineItem_GetBoundingBox(pldata->Type, pldata->PluginData, minPos, maxPos);
 
 				minPosItem = glm::make_vec3(minPos);
 				maxPosItem = glm::make_vec3(maxPos);

@@ -1,3 +1,4 @@
+#include <SHADERed/UI/CreateItemUI.h>
 #include <SHADERed/Engine/GLUtils.h>
 #include <SHADERed/Engine/GeometryFactory.h>
 #include <SHADERed/Engine/Model.h>
@@ -7,8 +8,10 @@
 #include <SHADERed/Objects/ShaderCompiler.h>
 #include <SHADERed/Objects/SystemVariableManager.h>
 #include <SHADERed/Objects/ThemeContainer.h>
-#include <SHADERed/UI/CreateItemUI.h>
+#include <SHADERed/UI/CodeEditorUI.h>
 #include <SHADERed/UI/UIHelper.h>
+
+#include <ImGuiFileDialog/ImGuiFileDialog.h>
 
 #include <ghc/filesystem.hpp>
 #include <fstream>
@@ -30,6 +33,10 @@ namespace ed {
 		m_selectedGroup = 0;
 		m_errorOccured = false;
 		memset(m_owner, 0, PIPELINE_ITEM_NAME_LENGTH * sizeof(char));
+
+		m_dialogPath = nullptr;
+		m_dialogShaderAuto = nullptr;
+		m_dialogShaderType = "";
 	}
 
 	void CreateItemUI::OnEvent(const SDL_Event& e)
@@ -140,23 +147,15 @@ namespace ed {
 			ImGui::NextColumn();
 			ImGui::PushItemWidth(PATH_SPACE_LEFT);
 			ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-			ImGui::InputText("##cui_spvspath", data->VSPath, MAX_PATH);
+			ImGui::InputText("##cui_spvspath", data->VSPath, SHADERED_MAX_PATH);
 			ImGui::PopItemFlag();
 			ImGui::PopItemWidth();
 			ImGui::SameLine();
 			if (ImGui::Button("...##cui_spvspath", ImVec2(-1, 0))) {
-				std::string file;
-				bool success = UIHelper::GetOpenFileDialog(file);
-				if (success) {
-					file = m_data->Parser.GetRelativePath(file);
-					strcpy(data->VSPath, file.c_str());
-					m_isShaderFileAuto[0] = false;
-
-					if (m_data->Parser.FileExists(file))
-						m_data->Messages.ClearGroup(m_item.Name);
-					else
-						m_data->Messages.Add(ed::MessageStack::Type::Error, m_item.Name, "Vertex shader file doesnt exist");
-				}
+				m_dialogPath = data->VSPath;
+				m_dialogShaderAuto = &m_isShaderFileAuto[0];
+				m_dialogShaderType = "Vertex";
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CreateItemShaderDlg", "Select a shader", "GLSL & HLSL {.glsl,.hlsl,.vert,.vs,.frag,.fs,.geom,.gs,.comp,.cs,.slang,.shader},.*", ".");
 			}
 			ImGui::NextColumn();
 
@@ -172,23 +171,15 @@ namespace ed {
 			ImGui::NextColumn();
 			ImGui::PushItemWidth(PATH_SPACE_LEFT);
 			ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-			ImGui::InputText("##cui_sppspath", data->PSPath, MAX_PATH);
+			ImGui::InputText("##cui_sppspath", data->PSPath, SHADERED_MAX_PATH);
 			ImGui::PopItemFlag();
 			ImGui::PopItemWidth();
 			ImGui::SameLine();
 			if (ImGui::Button("...##cui_sppspath", ImVec2(-1, 0))) {
-				std::string file;
-				bool success = UIHelper::GetOpenFileDialog(file);
-				if (success) {
-					file = m_data->Parser.GetRelativePath(file);
-					strcpy(data->PSPath, file.c_str());
-					m_isShaderFileAuto[1] = false;
-
-					if (m_data->Parser.FileExists(file))
-						m_data->Messages.ClearGroup(m_item.Name);
-					else
-						m_data->Messages.Add(ed::MessageStack::Type::Error, m_item.Name, "Pixel shader file doesnt exist");
-				}
+				m_dialogPath = data->PSPath;
+				m_dialogShaderAuto = &m_isShaderFileAuto[1];
+				m_dialogShaderType = "Pixel";
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CreateItemShaderDlg", "Select a shader", "GLSL & HLSL {.glsl,.hlsl,.vert,.vs,.frag,.fs,.geom,.gs,.comp,.cs,.slang,.shader},.*", ".");
 			}
 			ImGui::NextColumn();
 
@@ -216,23 +207,15 @@ namespace ed {
 			ImGui::NextColumn();
 			ImGui::PushItemWidth(PATH_SPACE_LEFT);
 			ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-			ImGui::InputText("##cui_spgspath", data->GSPath, MAX_PATH);
+			ImGui::InputText("##cui_spgspath", data->GSPath, SHADERED_MAX_PATH);
 			ImGui::PopItemFlag();
 			ImGui::PopItemWidth();
 			ImGui::SameLine();
 			if (ImGui::Button("...##cui_spgspath", ImVec2(-1, 0))) {
-				std::string file;
-				bool success = UIHelper::GetOpenFileDialog(file);
-				if (success) {
-					file = m_data->Parser.GetRelativePath(file);
-					strcpy(data->GSPath, file.c_str());
-					m_isShaderFileAuto[2] = false;
-
-					if (m_data->Parser.FileExists(file))
-						m_data->Messages.ClearGroup(m_item.Name);
-					else
-						m_data->Messages.Add(ed::MessageStack::Type::Error, m_item.Name, "Geometry shader file doesnt exist");
-				}
+				m_dialogPath = data->GSPath;
+				m_dialogShaderAuto = &m_isShaderFileAuto[2];
+				m_dialogShaderType = "Geometry";
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CreateItemShaderDlg", "Select a shader", "GLSL & HLSL {.glsl,.hlsl,.vert,.vs,.frag,.fs,.geom,.gs,.comp,.cs,.slang,.shader},.*", ".");
 			}
 			ImGui::NextColumn();
 
@@ -253,23 +236,15 @@ namespace ed {
 			ImGui::NextColumn();
 			ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			ImGui::PushItemWidth(PATH_SPACE_LEFT);
-			ImGui::InputText("##cui_cppath", data->Path, MAX_PATH);
+			ImGui::InputText("##cui_cppath", data->Path, SHADERED_MAX_PATH);
 			ImGui::PopItemWidth();
 			ImGui::PopItemFlag();
 			ImGui::SameLine();
 			if (ImGui::Button("...##cui_cppath", ImVec2(-1, 0))) {
-				std::string file;
-				bool success = UIHelper::GetOpenFileDialog(file);
-				if (success) {
-					file = m_data->Parser.GetRelativePath(file);
-					strcpy(data->Path, file.c_str());
-					m_isShaderFileAuto[0] = false;
-
-					if (m_data->Parser.FileExists(file))
-						m_data->Messages.ClearGroup(m_item.Name);
-					else
-						m_data->Messages.Add(ed::MessageStack::Type::Error, m_item.Name, "Compute shader file doesnt exist");
-				}
+				m_dialogPath = data->Path;
+				m_dialogShaderAuto = &m_isShaderFileAuto[0];
+				m_dialogShaderType = "Compute";
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CreateItemShaderDlg", "Select a shader", "GLSL & HLSL {.glsl,.hlsl,.vert,.vs,.frag,.fs,.geom,.gs,.comp,.cs,.slang,.shader},.*", ".");
 			}
 			ImGui::NextColumn();
 
@@ -300,23 +275,15 @@ namespace ed {
 			ImGui::NextColumn();
 			ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			ImGui::PushItemWidth(PATH_SPACE_LEFT);
-			ImGui::InputText("##cui_appath", data->Path, MAX_PATH);
+			ImGui::InputText("##cui_appath", data->Path, SHADERED_MAX_PATH);
 			ImGui::PopItemWidth();
 			ImGui::PopItemFlag();
 			ImGui::SameLine();
 			if (ImGui::Button("...##cui_appath", ImVec2(-1, 0))) {
-				std::string file;
-				bool success = UIHelper::GetOpenFileDialog(file);
-				if (success) {
-					file = m_data->Parser.GetRelativePath(file);
-					strcpy(data->Path, file.c_str());
-					m_isShaderFileAuto[0] = false;
-
-					if (m_data->Parser.FileExists(file))
-						m_data->Messages.ClearGroup(m_item.Name);
-					else
-						m_data->Messages.Add(ed::MessageStack::Type::Error, m_item.Name, "Audio shader file doesnt exist");
-				}
+				m_dialogPath = data->Path;
+				m_dialogShaderAuto = &m_isShaderFileAuto[0];
+				m_dialogShaderType = "Audio";
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CreateItemShaderDlg", "Select a shader", "GLSL & HLSL {.glsl,.hlsl,.vert,.vs,.frag,.fs,.geom,.gs,.comp,.cs,.slang,.shader},.*", ".");
 			}
 			ImGui::NextColumn();
 		}
@@ -603,22 +570,13 @@ namespace ed {
 			ImGui::NextColumn();
 			ImGui::PushItemWidth(PATH_SPACE_LEFT);
 			ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-			ImGui::InputText("##cui_objfile", data->Filename, MAX_PATH);
+			ImGui::InputText("##cui_objfile", data->Filename, SHADERED_MAX_PATH);
 			ImGui::PopItemFlag();
 			ImGui::PopItemWidth();
 			ImGui::SameLine();
 			if (ImGui::Button("...##cui_meshfile", ImVec2(-1, 0))) {
-				std::string file;
-				bool success = UIHelper::GetOpenFileDialog(file);
-				if (success) {
-					file = m_data->Parser.GetRelativePath(file);
-					strcpy(data->Filename, file.c_str());
-
-					eng::Model* mdl = m_data->Parser.LoadModel(data->Filename);
-
-					if (mdl != nullptr)
-						m_groups = mdl->GetMeshNames();
-				}
+				m_dialogPath = data->Filename;
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CreateMeshDlg", "3D model", ".*", ".");
 			}
 			ImGui::NextColumn();
 
@@ -650,6 +608,41 @@ namespace ed {
 		}
 
 		ImGui::Columns();
+
+
+		
+		// file dialogs
+		if (igfd::ImGuiFileDialog::Instance()->FileDialog("CreateItemShaderDlg")) {
+			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+				std::string file = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				file = m_data->Parser.GetRelativePath(file);
+
+				if (m_dialogPath != nullptr)
+					strcpy(m_dialogPath, file.c_str());
+
+				if (m_dialogShaderAuto != nullptr)
+					*m_dialogShaderAuto = false;
+
+				if (m_data->Parser.FileExists(file))
+					m_data->Messages.ClearGroup(m_item.Name);
+				else
+					m_data->Messages.Add(ed::MessageStack::Type::Error, m_item.Name, m_dialogShaderType + " shader file doesnt exist");
+			}
+			igfd::ImGuiFileDialog::Instance()->CloseDialog("CreateItemShaderDlg");
+		}
+		if (igfd::ImGuiFileDialog::Instance()->FileDialog("CreateMeshDlg")) {
+			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+				std::string file = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				file = m_data->Parser.GetRelativePath(file);
+
+				strcpy(m_dialogPath, file.c_str());
+
+				eng::Model* mdl = m_data->Parser.LoadModel(m_dialogPath);
+				if (mdl != nullptr)
+					m_groups = mdl->GetMeshNames();
+			}
+			igfd::ImGuiFileDialog::Instance()->CloseDialog("CreateMeshDlg");
+		}
 	}
 	void CreateItemUI::SetOwner(const char* shaderPass)
 	{
@@ -723,156 +716,6 @@ namespace ed {
 			m_item.Data = allocatedData;
 		}
 	}
-	void CreateItemUI::m_autoVariablePopulate(pipe::ShaderPass* shader)
-	{
-		// TODO: maybe use SPIRV-VM to get uniforms
-
-		if (m_data->Parser.FileExists(shader->VSPath)) {
-			std::string psContent = "", vsContent = "",
-						vsEntry = shader->VSEntry,
-						psEntry = shader->PSEntry;
-			ShaderLanguage vsLang = ShaderCompiler::GetShaderLanguageFromExtension(shader->VSPath);
-			ShaderLanguage psLang = ShaderCompiler::GetShaderLanguageFromExtension(shader->PSPath);
-
-			// pixel shader
-			if (psLang == ShaderLanguage::GLSL)
-				psContent = m_data->Parser.LoadProjectFile(shader->PSPath);
-			else {
-				std::vector<unsigned int> spv;
-				ShaderCompiler::CompileToSPIRV(spv, psLang, shader->PSPath, ShaderStage::Pixel, shader->PSEntry, shader->Macros, nullptr, &m_data->Parser);
-				psContent = ShaderCompiler::ConvertToGLSL(spv, psLang, ShaderStage::Pixel, shader->GSUsed, nullptr);
-				psEntry = "main";
-			}
-			GLuint ps = gl::CompileShader(GL_FRAGMENT_SHADER, psContent.c_str());
-
-			// vertex shader
-			if (ShaderCompiler::GetShaderLanguageFromExtension(shader->VSPath) == ShaderLanguage::GLSL)
-				vsContent = m_data->Parser.LoadProjectFile(shader->VSPath);
-			else {
-				std::vector<unsigned int> spv;
-				ShaderCompiler::CompileToSPIRV(spv, vsLang, shader->VSPath, ShaderStage::Vertex, shader->VSEntry, shader->Macros, nullptr, &m_data->Parser);
-				vsContent = ShaderCompiler::ConvertToGLSL(spv, vsLang, ShaderStage::Vertex, shader->GSUsed, nullptr);
-				vsEntry = "main";
-			}
-			GLuint vs = gl::CompileShader(GL_VERTEX_SHADER, vsContent.c_str());
-
-			// geometry shader
-			GLuint gs = 0;
-			if (shader->GSUsed && strlen(shader->GSPath) > 0 && strlen(shader->GSEntry) > 0) {
-				std::string gsContent = "",
-							gsEntry = shader->GSEntry;
-				ShaderLanguage gsLang = ShaderCompiler::GetShaderLanguageFromExtension(shader->GSPath);
-				if (gsLang == ShaderLanguage::GLSL)
-					gsContent = m_data->Parser.LoadProjectFile(shader->GSPath);
-				else { // HLSL / VK
-					std::vector<unsigned int> spv;
-					ShaderCompiler::CompileToSPIRV(spv, gsLang, shader->GSPath, ShaderStage::Geometry, shader->GSEntry, shader->Macros, nullptr, &m_data->Parser);
-					gsContent = ShaderCompiler::ConvertToGLSL(spv, gsLang, ShaderStage::Geometry, shader->GSUsed, nullptr);
-					gsEntry = "main";
-				}
-
-				gs = gl::CompileShader(GL_GEOMETRY_SHADER, gsContent.c_str());
-			}
-
-			GLuint prog = glCreateProgram();
-			glAttachShader(prog, vs);
-			glAttachShader(prog, ps);
-			if (shader->GSUsed) glAttachShader(prog, gs);
-			glLinkProgram(prog);
-
-			if (prog != 0) {
-				GLint count;
-
-				const GLsizei bufSize = 64; // maximum name length
-				GLchar name[bufSize];		// variable name in GLSL
-				GLsizei length;				// name length
-				GLuint samplerLoc = 0;
-
-				glGetProgramiv(prog, GL_ACTIVE_UNIFORMS, &count);
-				for (GLuint i = 0; i < count; i++) {
-					GLint size;
-					GLenum type;
-
-					glGetActiveUniform(prog, (GLuint)i, bufSize, &length, &size, &type, name);
-
-					ShaderVariable::ValueType valType = ShaderVariable::ValueType::Count;
-
-					if (type == GL_FLOAT)
-						valType = ShaderVariable::ValueType::Float1;
-					else if (type == GL_FLOAT_VEC2)
-						valType = ShaderVariable::ValueType::Float2;
-					else if (type == GL_FLOAT_VEC3)
-						valType = ShaderVariable::ValueType::Float3;
-					else if (type == GL_FLOAT_VEC4)
-						valType = ShaderVariable::ValueType::Float4;
-					else if (type == GL_INT)
-						valType = ShaderVariable::ValueType::Integer1;
-					else if (type == GL_INT_VEC2)
-						valType = ShaderVariable::ValueType::Integer2;
-					else if (type == GL_INT_VEC3)
-						valType = ShaderVariable::ValueType::Integer3;
-					else if (type == GL_INT_VEC4)
-						valType = ShaderVariable::ValueType::Integer4;
-					else if (type == GL_BOOL)
-						valType = ShaderVariable::ValueType::Boolean1;
-					else if (type == GL_BOOL_VEC2)
-						valType = ShaderVariable::ValueType::Boolean2;
-					else if (type == GL_BOOL_VEC3)
-						valType = ShaderVariable::ValueType::Boolean3;
-					else if (type == GL_BOOL_VEC4)
-						valType = ShaderVariable::ValueType::Boolean4;
-					else if (type == GL_FLOAT_MAT2)
-						valType = ShaderVariable::ValueType::Float2x2;
-					else if (type == GL_FLOAT_MAT3)
-						valType = ShaderVariable::ValueType::Float3x3;
-					else if (type == GL_FLOAT_MAT4)
-						valType = ShaderVariable::ValueType::Float4x4;
-
-					if (valType != ShaderVariable::ValueType::Count) {
-						ed::SystemShaderVariable sysType = m_autoSystemValue(name);
-						if (SystemVariableManager::GetType(sysType) != valType)
-							sysType = SystemShaderVariable::None;
-						shader->Variables.Add(new ed::ShaderVariable(valType, name, sysType));
-					}
-				}
-			}
-		}
-	}
-	ed::SystemShaderVariable CreateItemUI::m_autoSystemValue(const std::string& name)
-	{
-		std::string vname = name;
-		std::transform(vname.begin(), vname.end(), vname.begin(), tolower);
-
-		// list of rules for detection:
-		if (vname.find("time") != std::string::npos && vname.find("d") == std::string::npos && vname.find("del") == std::string::npos && vname.find("delta") == std::string::npos)
-			return SystemShaderVariable::Time;
-		else if (vname.find("time") != std::string::npos && (vname.find("d") != std::string::npos || vname.find("del") != std::string::npos || vname.find("delta") != std::string::npos))
-			return SystemShaderVariable::TimeDelta;
-		else if (vname.find("frame") != std::string::npos || vname.find("index") != std::string::npos)
-			return SystemShaderVariable::FrameIndex;
-		else if (vname.find("size") != std::string::npos || vname.find("window") != std::string::npos || vname.find("viewport") != std::string::npos || vname.find("resolution") != std::string::npos || vname.find("res") != std::string::npos)
-			return SystemShaderVariable::ViewportSize;
-		else if (vname.find("mouse") != std::string::npos || vname == "mpos")
-			return SystemShaderVariable::MousePosition;
-		else if (vname == "view" || vname == "matview" || vname == "matv" || vname == "mview")
-			return SystemShaderVariable::View;
-		else if (vname == "proj" || vname == "matproj" || vname == "matp" || vname == "mproj" || vname == "projection" || vname == "matprojection" || vname == "mprojection")
-			return SystemShaderVariable::Projection;
-		else if (vname == "matvp" || vname == "matviewproj" || vname == "matviewprojection" || vname == "viewprojection" || vname == "viewproj" || vname == "mvp")
-			return SystemShaderVariable::ViewProjection;
-		else if (vname.find("ortho") != std::string::npos)
-			return SystemShaderVariable::Orthographic;
-		else if (vname.find("geo") != std::string::npos || vname.find("model") != std::string::npos)
-			return SystemShaderVariable::GeometryTransform;
-		else if (vname.find("pick") != std::string::npos)
-			return SystemShaderVariable::IsPicked;
-		else if (vname.find("cam") != std::string::npos)
-			return SystemShaderVariable::CameraPosition3;
-		else if (vname.find("keys") != std::string::npos || vname.find("wasd") != std::string::npos)
-			return SystemShaderVariable::KeysWASD;
-
-		return SystemShaderVariable::None;
-	}
 	bool CreateItemUI::Create()
 	{
 		if (strlen(m_item.Name) < 2) {
@@ -900,9 +743,16 @@ namespace ed {
 			data->RTCount = 1;
 			data->InputLayout = gl::CreateDefaultInputLayout();
 
-			m_autoVariablePopulate(data);
-
 			m_errorOccured = !m_data->Pipeline.AddShaderPass(m_item.Name, data);
+
+			if (!m_errorOccured) {
+				PipelineItem* actualItem = m_data->Pipeline.Get(m_item.Name);
+
+				CodeEditorUI* code = ((CodeEditorUI*)m_ui->Get(ViewID::Code));
+				code->Open(actualItem, ed::ShaderStage::Vertex);
+				code->Open(actualItem, ed::ShaderStage::Pixel);
+			}
+
 			return !m_errorOccured;
 		} else if (m_item.Type == PipelineItem::ItemType::ComputePass) {
 			pipe::ComputePass* data = new pipe::ComputePass();
@@ -937,8 +787,10 @@ namespace ed {
 				PipelineItem* ownerItem = m_data->Pipeline.Get(m_owner);
 				if (ownerItem->Type == PipelineItem::ItemType::ShaderPass)
 					inpLayout = ((pipe::ShaderPass*)(ownerItem->Data))->InputLayout;
-				else if (ownerItem->Type == PipelineItem::ItemType::PluginItem)
-					inpLayout = m_data->Plugins.BuildInputLayout(((pipe::PluginItemData*)ownerItem->Data)->Owner, m_owner);
+				else if (ownerItem->Type == PipelineItem::ItemType::PluginItem) {
+					pipe::PluginItemData* pdata = ((pipe::PluginItemData*)ownerItem->Data);
+					inpLayout = m_data->Plugins.BuildInputLayout(pdata->Owner, pdata->Type, pdata->PluginData);
+				}
 
 				data->Position = glm::vec3(0, 0, 0);
 				data->Rotation = glm::vec3(0, 0, 0);

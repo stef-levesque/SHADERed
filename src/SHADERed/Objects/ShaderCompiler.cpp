@@ -361,6 +361,14 @@ namespace ed {
 
 		// set macros
 		std::string preambleStr = (inLang == ShaderLanguage::HLSL) ? "#extension GL_GOOGLE_include_directive : enable\n" : "";
+
+#ifdef SHADERED_WEB
+		preambleStr += "#define SHADERED_WEB\n";
+#else
+		preambleStr += "#define SHADERED_DESKTOP\n";
+#endif
+		preambleStr += "#define SHADERED_VERSION " + std::to_string(SHADERED_VERSION) + "\n";
+
 		for (auto& macro : macros) {
 			if (!macro.Active)
 				continue;
@@ -380,7 +388,7 @@ namespace ed {
 		shader.setEnvTarget(glslang::EShTargetSpv, targetLanguageVersion);
 
 		TBuiltInResource res = DefaultTBuiltInResource;
-		EShMessages messages = (EShMessages)(EShMsgSpvRules);
+		EShMessages messages = (EShMessages)(EShMsgSpvRules | EShMsgKeepUncalled);
 
 		const int defVersion = sVersion;
 
@@ -438,14 +446,43 @@ namespace ed {
 	
 		return true;
 	}
+	IPlugin1* ShaderCompiler::GetPluginLanguageFromExtension(int* lang, const std::string& filename, const std::vector<IPlugin1*>& pls)
+	{
+		std::string ext = filename.substr(filename.find_last_of('.') + 1);
+		std::string langName = "";
+
+		for (const auto& pair : Settings::Instance().General.PluginShaderExtensions)
+			if (std::count(pair.second.begin(), pair.second.end(), ext) > 0) {
+				langName = pair.first;
+				break;
+			}
+
+		for (IPlugin1* pl : pls) {
+			int langlen = pl->CustomLanguage_GetCount();
+			for (int i = 0; i < langlen; i++) {
+				if (langName == std::string(pl->CustomLanguage_GetName(i))) {
+					*lang = i;
+					return pl;
+				}
+			}
+		}
+
+		*lang = -1;
+		return nullptr;
+	}
 	ShaderLanguage ShaderCompiler::GetShaderLanguageFromExtension(const std::string& file)
 	{
 		std::vector<std::string>& hlslExts = Settings::Instance().General.HLSLExtensions;
 		std::vector<std::string>& vkExts = Settings::Instance().General.VulkanGLSLExtensions;
-		if (std::count(hlslExts.begin(), hlslExts.end(), file.substr(file.find_last_of('.') + 1)) > 0)
+		std::string ext = file.substr(file.find_last_of('.') + 1);
+
+		if (std::count(hlslExts.begin(), hlslExts.end(), ext) > 0)
 			return ShaderLanguage::HLSL;
-		if (std::count(vkExts.begin(), vkExts.end(), file.substr(file.find_last_of('.') + 1)) > 0)
+		if (std::count(vkExts.begin(), vkExts.end(), ext) > 0)
 			return ShaderLanguage::VulkanGLSL;
+		for (const auto& pair : Settings::Instance().General.PluginShaderExtensions)
+			if (std::count(pair.second.begin(), pair.second.end(), ext) > 0)
+				return ShaderLanguage::Plugin;
 
 		return ShaderLanguage::GLSL;
 	}

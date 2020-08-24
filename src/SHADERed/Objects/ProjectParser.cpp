@@ -8,7 +8,7 @@
 #include <SHADERed/Objects/ObjectManager.h>
 #include <SHADERed/Objects/PipelineItem.h>
 #include <SHADERed/Objects/PipelineManager.h>
-#include <SHADERed/Objects/PluginAPI/PluginManager.h>
+#include <SHADERed/Objects/PluginManager.h>
 #include <SHADERed/Objects/ProjectParser.h>
 #include <SHADERed/Objects/RenderEngine.h>
 #include <SHADERed/Objects/ShaderCompiler.h>
@@ -21,6 +21,7 @@
 #include <SHADERed/UI/PipelineUI.h>
 #include <SHADERed/UI/PropertyUI.h>
 
+#include <algorithm>
 #include <fstream>
 #include <ghc/filesystem.hpp>
 
@@ -33,6 +34,7 @@ namespace ed {
 		case ShaderLanguage::HLSL: return Settings::Instance().General.HLSLExtensions[0];
 		case ShaderLanguage::GLSL: return "glsl";
 		case ShaderLanguage::VulkanGLSL: return Settings::Instance().General.VulkanGLSLExtensions[0];
+		case ShaderLanguage::Plugin: return filename.substr(filename.find_last_of('.') + 1);
 		}
 
 		return "glsl";
@@ -74,7 +76,7 @@ namespace ed {
 	}
 	void ProjectParser::Open(const std::string& file)
 	{
-		Logger::Get().Log("Openning a project file " + file);
+		Logger::Get().Log("Opening a project file " + file);
 
 		pugi::xml_document doc;
 		pugi::xml_parse_result result = doc.load_file(file.c_str());
@@ -90,41 +92,20 @@ namespace ed {
 		for (pugi::xml_node pluginNode : pluginsContainerNode.children("entry")) {
 			std::string pname = pluginNode.attribute("name").as_string();
 			int pver = pluginNode.attribute("ver").as_int();
+			bool required = true;
+			
+			if (!pluginNode.attribute("required").empty())
+				required = pluginNode.attribute("required").as_bool();
 
-			m_pluginList.push_back(pname);
+			IPlugin1* plugin = m_plugins->GetPlugin(pname);
+			
+			if (plugin)
+				m_pluginList.push_back(pname);
 
-			IPlugin* plugin = m_plugins->GetPlugin(pname);
-			if (plugin == nullptr) {
+			if (plugin == nullptr && required) {
 				pluginTest = false;
 
-				std::string msg = "The project you are trying to open requires plugin " + pname + ".\nDo you want to install the plugin?";
-
-				const SDL_MessageBoxButtonData buttons[] = {
-					{ /* .flags, .buttonid, .text */ 0, 1, "NO" },
-					{ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 0, "YES" },
-				};
-				const SDL_MessageBoxData messageboxdata = {
-					SDL_MESSAGEBOX_INFORMATION, /* .flags */
-					m_ui->GetSDLWindow(),		/* .window */
-					"SHADERed",					/* .title */
-					msg.c_str(),				/* .message */
-					SDL_arraysize(buttons),		/* .numbuttons */
-					buttons,					/* .buttons */
-					NULL						/* .colorScheme */
-				};
-				int buttonid;
-				if (SDL_ShowMessageBox(&messageboxdata, &buttonid) < 0) { }
-
-				if (buttonid == 0) {
-					// TODO: redirect to .../plugin?name=pname
-				}
-
-				break;
-			} else if (!m_plugins->IsActive(pname)) {
-
-				pluginTest = false;
-
-				std::string msg = "The project you are trying to open requires plugin " + pname + " which you have installed.\nEnable the plugin in the options.";
+				std::string msg = "The project you are trying to open requires plugin \"" + pname + "\".";
 
 				const SDL_MessageBoxButtonData buttons[] = {
 					{ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 0, "OK" },
@@ -145,33 +126,35 @@ namespace ed {
 
 				pluginTest = false;
 			} else {
-				int instPVer = m_plugins->GetPluginVersion(pname);
-				if (instPVer < pver) {
-					pluginTest = false;
+				if (plugin) {
+					int instPVer = m_plugins->GetPluginVersion(pname);
+					if (instPVer < pver && !plugin->IsVersionCompatible(instPVer)) {
+						pluginTest = false;
 
-					std::string msg = "The project you are trying to open requires plugin " + pname + " version " + std::to_string(pver) + " while you have version " + std::to_string(instPVer) + " installed.\nDo you want to update your plugin?";
+						std::string msg = "The project you are trying to open requires plugin " + pname + " version " + std::to_string(pver) + " while you have version " + std::to_string(instPVer) + " installed.\n";
 
-					const SDL_MessageBoxButtonData buttons[] = {
-						{ /* .flags, .buttonid, .text */ 0, 1, "NO" },
-						{ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 0, "YES" },
-					};
-					const SDL_MessageBoxData messageboxdata = {
-						SDL_MESSAGEBOX_INFORMATION, /* .flags */
-						m_ui->GetSDLWindow(),		/* .window */
-						"SHADERed",					/* .title */
-						msg.c_str(),				/* .message */
-						SDL_arraysize(buttons),		/* .numbuttons */
-						buttons,					/* .buttons */
-						NULL						/* .colorScheme */
-					};
-					int buttonid;
-					if (SDL_ShowMessageBox(&messageboxdata, &buttonid) < 0) { }
+						const SDL_MessageBoxButtonData buttons[] = {
+							{ /* .flags, .buttonid, .text */ 0, 1, "NO" },
+							{ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 0, "YES" },
+						};
+						const SDL_MessageBoxData messageboxdata = {
+							SDL_MESSAGEBOX_INFORMATION, /* .flags */
+							m_ui->GetSDLWindow(),		/* .window */
+							"SHADERed",					/* .title */
+							msg.c_str(),				/* .message */
+							SDL_arraysize(buttons),		/* .numbuttons */
+							buttons,					/* .buttons */
+							NULL						/* .colorScheme */
+						};
+						int buttonid;
+						if (SDL_ShowMessageBox(&messageboxdata, &buttonid) < 0) {}
 
-					if (buttonid == 0) {
-						// TODO: redirect to .../plugin?name=pname
+						if (buttonid == 0) {
+							// TODO: redirect to .../plugin?name=pname
+						}
+
+						break;
 					}
-
-					break;
 				}
 			}
 		}
@@ -211,7 +194,7 @@ namespace ed {
 
 		// notify plugins that we've finished with loading
 		for (const auto& pname : m_pluginList)
-			m_plugins->GetPlugin(pname)->BeginProjectLoading();
+			m_plugins->GetPlugin(pname)->Project_BeginLoad();
 
 		switch (projectVersion) {
 		case 1: m_parseV1(projectNode); break;
@@ -228,7 +211,7 @@ namespace ed {
 
 		// notify plugins that we've finished with loading
 		for (const auto& pname : m_pluginList)
-			m_plugins->GetPlugin(pname)->EndProjectLoading();
+			m_plugins->GetPlugin(pname)->Project_EndLoad();
 
 		Logger::Get().Log("Finished with parsing a project file");
 	}
@@ -316,7 +299,7 @@ namespace ed {
 			}
 
 			for (const auto& pname : m_pluginList)
-				m_plugins->GetPlugin(pname)->CopyFilesOnSave(m_projectPath.c_str());
+				m_plugins->GetPlugin(pname)->Project_CopyFilesOnSave(m_projectPath.c_str());
 		}
 
 		pugi::xml_document doc;
@@ -326,6 +309,7 @@ namespace ed {
 		pugi::xml_node objectsNode = projectNode.append_child("objects");
 		pugi::xml_node camsnapsNode = projectNode.append_child("cameras");
 		pugi::xml_node settingsNode = projectNode.append_child("settings");
+		pugi::xml_node pluginDataNode = projectNode.append_child("plugindata");
 
 		// shader passes
 		for (PipelineItem* passItem : passItems) {
@@ -447,6 +431,7 @@ namespace ed {
 				pipe::ComputePass* passData = (pipe::ComputePass*)passItem->Data;
 
 				passNode.append_attribute("type").set_value("compute");
+				passNode.append_attribute("active").set_value(passData->Active);
 
 				// compute shader
 				pugi::xml_node csNode = passNode.append_child("shader");
@@ -518,7 +503,7 @@ namespace ed {
 				}
 
 				pugi::xml_node dataNode = passNode.append_child("data");
-				const char* pObjectSrc = plData->Owner->ExportPipelineItem(plData->Type, plData->PluginData);
+				const char* pObjectSrc = plData->Owner->PipelineItem_Export(plData->Type, plData->PluginData);
 				dataNode.append_buffer(pObjectSrc, strlen(pObjectSrc));
 			}
 		}
@@ -549,21 +534,21 @@ namespace ed {
 			// textures & buffers
 			std::vector<std::string> texs = m_objects->GetObjects();
 			for (int i = 0; i < texs.size(); i++) {
-				bool isRT = m_objects->IsRenderTexture(texs[i]);
-				bool isAudio = m_objects->IsAudio(texs[i]);
-				bool isCube = m_objects->IsCubeMap(texs[i]);
-				bool isBuffer = m_objects->IsBuffer(texs[i]);
-				bool isImage = m_objects->IsImage(texs[i]);
-				bool isImage3D = m_objects->IsImage3D(texs[i]);
-				bool isPluginOwner = m_objects->IsPluginObject(texs[i]);
-				bool isTexture = m_objects->IsTexture(texs[i]);
+				ObjectManagerItem* item = m_objects->GetObjectManagerItem(texs[i]);
+
+				bool isRT = item->RT != nullptr;
+				bool isAudio = item->Sound != nullptr;
+				bool isCube = item->IsCube;
+				bool isBuffer = item->Buffer != nullptr;
+				bool isImage = item->Image != nullptr;
+				bool isImage3D = item->Image3D != nullptr;
+				bool isPluginOwner = item->Plugin != nullptr;
+				bool isTexture = item->IsTexture;
+				bool isKeyboardTexture = item->IsKeyboardTexture;
 
 				pugi::xml_node textureNode = objectsNode.append_child("object");
 				textureNode.append_attribute("type").set_value(isBuffer ? "buffer" : (isRT ? "rendertexture" : (isAudio ? "audio" : (isImage ? "image" : (isImage3D ? "image3d" : (isPluginOwner ? "pluginobject" : "texture"))))));
-				textureNode.append_attribute((isRT || isCube || isBuffer || isImage || isImage3D || isPluginOwner) ? "name" : "path").set_value(texs[i].c_str());
-
-				if (!isRT && !isAudio && !isBuffer && !isImage && !isImage3D && !isPluginOwner && isCube)
-					textureNode.append_attribute("cube").set_value(isCube);
+				textureNode.append_attribute(((isTexture && !isKeyboardTexture) || isAudio) ? "path" : "name").set_value(texs[i].c_str());
 
 				if (isRT) {
 					ed::RenderTextureObject* rtObj = m_objects->GetRenderTexture(m_objects->GetTexture(texs[i]));
@@ -586,15 +571,17 @@ namespace ed {
 				if (isCube) {
 					std::vector<std::string> texmaps = m_objects->GetCubemapTextures(texs[i]);
 
+					textureNode.append_attribute("cube").set_value(isCube);
+
 					textureNode.append_attribute("left").set_value(texmaps[0].c_str());
 					textureNode.append_attribute("top").set_value(texmaps[1].c_str());
 					textureNode.append_attribute("front").set_value(texmaps[2].c_str());
 					textureNode.append_attribute("bottom").set_value(texmaps[3].c_str());
 					textureNode.append_attribute("right").set_value(texmaps[4].c_str());
-					textureNode.append_attribute("back").set_value(texmaps[4].c_str());
+					textureNode.append_attribute("back").set_value(texmaps[5].c_str());
 				}
 
-				if (isTexture) {
+				if (isTexture && !isKeyboardTexture) {
 					ObjectManagerItem* item = m_objects->GetObjectManagerItem(texs[i]);
 
 					textureNode.append_attribute("vflip").set_value(item->Texture_VFlipped);
@@ -604,8 +591,14 @@ namespace ed {
 					textureNode.append_attribute("wrap_t").set_value(ed::gl::String::TextureWrap(item->Texture_WrapT));
 				}
 
+				if (isKeyboardTexture)
+					textureNode.append_attribute("keyboard_texture").set_value(isKeyboardTexture);
+
 				if (isImage) {
 					ImageObject* iobj = m_objects->GetImage(texs[i]);
+
+					if (iobj->DataPath[0] != 0)
+						textureNode.append_attribute("data").set_value(iobj->DataPath);
 
 					textureNode.append_attribute("width").set_value(iobj->Size.x);
 					textureNode.append_attribute("height").set_value(iobj->Size.y);
@@ -621,7 +614,7 @@ namespace ed {
 				}
 
 				PluginObject* pluginObj = (PluginObject*)m_objects->GetPluginObject(texs[i]);
-				bool isPluginObjectUAV = isPluginOwner && pluginObj->Owner->IsObjectBindableUAV(pluginObj->Type);
+				bool isPluginObjectUAV = isPluginOwner && pluginObj->Owner->Object_IsBindableUAV(pluginObj->Type);
 
 				if (isPluginOwner) {
 					m_addPlugin(m_plugins->GetPluginName(pluginObj->Owner));
@@ -629,7 +622,7 @@ namespace ed {
 					textureNode.append_attribute("plugin").set_value(m_plugins->GetPluginName(pluginObj->Owner).c_str());
 					textureNode.append_attribute("objecttype").set_value(pluginObj->Type);
 
-					const char* pObjectSrc = pluginObj->Owner->ExportObject(pluginObj->Type, pluginObj->Data, pluginObj->ID);
+					const char* pObjectSrc = pluginObj->Owner->Object_Export(pluginObj->Type, pluginObj->Data, pluginObj->ID);
 
 					if (pObjectSrc != nullptr)
 						textureNode.append_buffer(pObjectSrc, strlen(pObjectSrc));
@@ -855,12 +848,27 @@ namespace ed {
 			}
 		}
 
+		for (auto& pl : m_plugins->Plugins()) {
+			if (pl->Project_HasAdditionalData()) {
+				const auto& plName = m_plugins->GetPluginName(pl);
+				if (std::count(m_pluginList.begin(), m_pluginList.end(), plName) == 0)
+					m_pluginList.push_back(plName);
+
+				const char* data = pl->Project_ExportAdditionalData();
+
+				pugi::xml_node entry = pluginDataNode.append_child("entry");
+				entry.append_attribute("owner").set_value(plName.c_str());
+				entry.append_buffer(data, strlen(data));
+			}
+		}
+
 		if (m_pluginList.size() > 0) {
 			pugi::xml_node pluginsNode = projectNode.append_child("plugins");
 			for (const auto& pname : m_pluginList) {
 				pugi::xml_node pnode = pluginsNode.append_child("entry");
 				pnode.append_attribute("name").set_value(pname.c_str());
 				pnode.append_attribute("ver").set_value(m_plugins->GetPluginVersion(pname));
+				pnode.append_attribute("required").set_value(m_plugins->GetPlugin(pname)->IsRequired());
 			}
 		}
 
@@ -984,7 +992,7 @@ namespace ed {
 						colID++;
 					}
 					else if (var->Function == FunctionShaderVariable::PluginFunction)
-						var->PluginFuncData.Owner->ImportFunctionArguments(var->PluginFuncData.Name, (plugin::VariableType)var->GetType(), var->Arguments, getInnerXML(value).c_str());
+						var->PluginFuncData.Owner->VariableFunctions_ImportArguments(var->PluginFuncData.Name, (plugin::VariableType)var->GetType(), var->Arguments, getInnerXML(value).c_str());
 					else
 						*FunctionVariableManager::LoadFloat(var->Arguments, colID++) = value.text().as_float();
 				} else {
@@ -1031,7 +1039,7 @@ namespace ed {
 			} else if (var->Function == FunctionShaderVariable::PluginFunction) {
 				m_addPlugin(m_plugins->GetPluginName(var->PluginFuncData.Owner));
 
-				const char* valNode = var->PluginFuncData.Owner->ExportFunctionArguments(var->PluginFuncData.Name, (plugin::VariableType)var->GetType(), var->Arguments);
+				const char* valNode = var->PluginFuncData.Owner->VariableFunctions_ExportArguments(var->PluginFuncData.Name, (plugin::VariableType)var->GetType(), var->Arguments);
 				valueRowNode.append_child("value").append_buffer(valNode, strlen(valNode));
 			} else {
 				// save arguments
@@ -1045,6 +1053,9 @@ namespace ed {
 		if (vars.size() > 0) {
 			pugi::xml_node varsNodes = node.append_child("variables");
 			for (const auto& var : vars) {
+				if (var->GetType() == ShaderVariable::ValueType::Count)
+					continue;
+					
 				pugi::xml_node varNode = varsNodes.append_child("variable");
 				varNode.append_attribute("type").set_value(VARIABLE_TYPE_NAMES[(int)var->GetType()]);
 				varNode.append_attribute("name").set_value(var->Name);
@@ -1171,45 +1182,36 @@ namespace ed {
 				if (s->FrontFace != GL_CCW)
 					itemNode.append_child("ccw").text().set(false);
 
-				if (s->Blend) {
-					itemNode.append_child("blend").text().set(true);
+				itemNode.append_child("blend").text().set(s->Blend);
+				itemNode.append_child("alpha2coverage").text().set(s->AlphaToCoverage);
+				itemNode.append_child("colorsrcfactor").text().set(gl::String::BlendFactor(s->BlendSourceFactorRGB));
+				itemNode.append_child("colordstfactor").text().set(gl::String::BlendFactor(s->BlendDestinationFactorRGB));
+				itemNode.append_child("colorfunc").text().set(gl::String::BlendFunction(s->BlendFunctionColor));
+				itemNode.append_child("alphasrcfactor").text().set(gl::String::BlendFactor(s->BlendSourceFactorAlpha));
+				itemNode.append_child("alphadstfactor").text().set(gl::String::BlendFactor(s->BlendDestinationFactorAlpha));
+				itemNode.append_child("alphafunc").text().set(gl::String::BlendFunction(s->BlendFunctionAlpha));
+				itemNode.append_child("blendfactor_r").text().set(s->BlendFactor.r);
+				itemNode.append_child("blendfactor_g").text().set(s->BlendFactor.g);
+				itemNode.append_child("blendfactor_b").text().set(s->BlendFactor.b);
+				itemNode.append_child("blendfactor_a").text().set(s->BlendFactor.a);
 
-					if (s->AlphaToCoverage)
-						itemNode.append_child("alpha2coverage").text().set(true);
+				itemNode.append_child("depthtest").text().set(s->DepthTest);
+				itemNode.append_child("depthclamp").text().set(s->DepthClamp);
+				itemNode.append_child("depthmask").text().set(s->DepthMask);
+				itemNode.append_child("depthfunc").text().set(gl::String::ComparisonFunction(s->DepthFunction));
+				itemNode.append_child("depthbias").text().set(s->DepthBias);
 
-					itemNode.append_child("colorsrcfactor").text().set(gl::String::BlendFactor(s->BlendSourceFactorRGB));
-					itemNode.append_child("colordstfactor").text().set(gl::String::BlendFactor(s->BlendDestinationFactorRGB));
-					itemNode.append_child("colorfunc").text().set(gl::String::BlendFunction(s->BlendFunctionColor));
-					itemNode.append_child("alphasrcfactor").text().set(gl::String::BlendFactor(s->BlendSourceFactorAlpha));
-					itemNode.append_child("alphadstfactor").text().set(gl::String::BlendFactor(s->BlendDestinationFactorAlpha));
-					itemNode.append_child("alphafunc").text().set(gl::String::BlendFunction(s->BlendFunctionAlpha));
-					itemNode.append_child("blendfactor_r").text().set(s->BlendFactor.r);
-					itemNode.append_child("blendfactor_g").text().set(s->BlendFactor.g);
-					itemNode.append_child("blendfactor_b").text().set(s->BlendFactor.b);
-					itemNode.append_child("blendfactor_a").text().set(s->BlendFactor.a);
-				}
-
-				if (s->DepthTest) {
-					itemNode.append_child("depthtest").text().set(true);
-					itemNode.append_child("depthclamp").text().set(s->DepthClamp);
-					itemNode.append_child("depthmask").text().set(s->DepthMask);
-					itemNode.append_child("depthfunc").text().set(gl::String::ComparisonFunction(s->DepthFunction));
-					itemNode.append_child("depthbias").text().set(s->DepthBias);
-				}
-
-				if (s->StencilTest) {
-					itemNode.append_child("stenciltest").text().set(true);
-					itemNode.append_child("stencilmask").text().set(s->StencilMask);
-					itemNode.append_child("stencilref").text().set(s->StencilReference);
-					itemNode.append_child("stencilfrontfunc").text().set(gl::String::ComparisonFunction(s->StencilFrontFaceFunction));
-					itemNode.append_child("stencilbackfunc").text().set(gl::String::ComparisonFunction(s->StencilBackFaceFunction));
-					itemNode.append_child("stencilfrontpass").text().set(gl::String::StencilOperation(s->StencilFrontFaceOpPass));
-					itemNode.append_child("stencilbackpass").text().set(gl::String::StencilOperation(s->StencilBackFaceOpPass));
-					itemNode.append_child("stencilfrontfail").text().set(gl::String::StencilOperation(s->StencilFrontFaceOpStencilFail));
-					itemNode.append_child("stencilbackfail").text().set(gl::String::StencilOperation(s->StencilBackFaceOpStencilFail));
-					itemNode.append_child("depthfrontfail").text().set(gl::String::StencilOperation(s->StencilFrontFaceOpDepthFail));
-					itemNode.append_child("depthbackfail").text().set(gl::String::StencilOperation(s->StencilBackFaceOpDepthFail));
-				}
+				itemNode.append_child("stenciltest").text().set(s->StencilTest);
+				itemNode.append_child("stencilmask").text().set(s->StencilMask);
+				itemNode.append_child("stencilref").text().set(s->StencilReference);
+				itemNode.append_child("stencilfrontfunc").text().set(gl::String::ComparisonFunction(s->StencilFrontFaceFunction));
+				itemNode.append_child("stencilbackfunc").text().set(gl::String::ComparisonFunction(s->StencilBackFaceFunction));
+				itemNode.append_child("stencilfrontpass").text().set(gl::String::StencilOperation(s->StencilFrontFaceOpPass));
+				itemNode.append_child("stencilbackpass").text().set(gl::String::StencilOperation(s->StencilBackFaceOpPass));
+				itemNode.append_child("stencilfrontfail").text().set(gl::String::StencilOperation(s->StencilFrontFaceOpStencilFail));
+				itemNode.append_child("stencilbackfail").text().set(gl::String::StencilOperation(s->StencilBackFaceOpStencilFail));
+				itemNode.append_child("depthfrontfail").text().set(gl::String::StencilOperation(s->StencilFrontFaceOpDepthFail));
+				itemNode.append_child("depthbackfail").text().set(gl::String::StencilOperation(s->StencilBackFaceOpDepthFail));
 			} else if (item->Type == PipelineItem::ItemType::Model) {
 				itemNode.append_attribute("type").set_value("model");
 
@@ -1284,7 +1286,7 @@ namespace ed {
 				itemNode.append_attribute("itemtype").set_value(plData->Type);
 
 				pugi::xml_node dataNode = itemNode.append_child("data");
-				const char* pObjectSrc = plData->Owner->ExportPipelineItem(plData->Type, plData->PluginData);
+				const char* pObjectSrc = plData->Owner->PipelineItem_Export(plData->Type, plData->PluginData);
 
 				if (pObjectSrc != nullptr)
 					dataNode.append_buffer(pObjectSrc, strlen(pObjectSrc));
@@ -1525,17 +1527,21 @@ namespace ed {
 					}
 				}
 			} else if (strcmp(itemNode.attribute("type").as_string(), "plugin") == 0) {
+				IPlugin1* plugin = m_plugins->GetPlugin(itemNode.attribute("plugin").as_string());
+
 				itemType = PipelineItem::ItemType::PluginItem;
 				itemData = new pipe::PluginItemData;
-				pipe::PluginItemData* tData = (pipe::PluginItemData*)itemData;
 
-				IPlugin* plugin = m_plugins->GetPlugin(itemNode.attribute("plugin").as_string());
-				std::string otype(itemNode.attribute("itemtype").as_string());
+				if (plugin) {
+					pipe::PluginItemData* tData = (pipe::PluginItemData*)itemData;
 
-				tData->Items.clear();
-				tData->Owner = plugin;
-				strcpy(tData->Type, otype.c_str());
-				tData->PluginData = plugin->ImportPipelineItem(name, itemName, otype.c_str(), getInnerXML(itemNode.child("data")).c_str());
+					std::string otype(itemNode.attribute("itemtype").as_string());
+
+					tData->Items.clear();
+					tData->Owner = plugin;
+					strcpy(tData->Type, otype.c_str());
+					tData->PluginData = plugin->PipelineItem_Import(name, itemName, otype.c_str(), getInnerXML(itemNode.child("data")).c_str());
+				}
 			}
 
 			// create and modify if needed
@@ -1627,7 +1633,7 @@ namespace ed {
 				std::string shaderNodeType(shaderNode.attribute("type").as_string()); // "vs" or "ps" or "gs"
 
 				// parse path and type
-				pugi::char_t shaderPath[MAX_PATH];
+				pugi::char_t shaderPath[SHADERED_MAX_PATH];
 				strcpy(shaderPath, toGenericPath(shaderNode.child("path").text().as_string()).c_str());
 				const pugi::char_t* shaderEntry = shaderNode.child("entry").text().as_string();
 				if (shaderNodeType == "vs") {
@@ -1955,10 +1961,10 @@ namespace ed {
 			const pugi::char_t* objType = objectNode.attribute("type").as_string();
 
 			if (strcmp(objType, "texture") == 0) {
-				pugi::char_t name[MAX_PATH];
+				pugi::char_t name[SHADERED_MAX_PATH];
 				bool isCube = false;
-				pugi::char_t cubeLeft[MAX_PATH], cubeRight[MAX_PATH], cubeTop[MAX_PATH],
-					cubeBottom[MAX_PATH], cubeFront[MAX_PATH], cubeBack[MAX_PATH];
+				pugi::char_t cubeLeft[SHADERED_MAX_PATH], cubeRight[SHADERED_MAX_PATH], cubeTop[SHADERED_MAX_PATH],
+					cubeBottom[SHADERED_MAX_PATH], cubeFront[SHADERED_MAX_PATH], cubeBack[SHADERED_MAX_PATH];
 				if (!objectNode.attribute("cube").empty())
 					isCube = objectNode.attribute("cube").as_bool();
 
@@ -2055,7 +2061,7 @@ namespace ed {
 					}
 				}
 			} else if (strcmp(objType, "audio") == 0) {
-				pugi::char_t objPath[MAX_PATH];
+				pugi::char_t objPath[SHADERED_MAX_PATH];
 				strcpy(objPath, toGenericPath(objectNode.attribute("path").as_string()).c_str());
 
 				m_objects->CreateAudio(std::string(objPath));
@@ -2244,7 +2250,7 @@ namespace ed {
 					std::string shaderNodeType(shaderNode.attribute("type").as_string()); // "vs" or "ps" or "gs"
 
 					// parse path and type
-					pugi::char_t shaderPath[MAX_PATH];
+					pugi::char_t shaderPath[SHADERED_MAX_PATH];
 					strcpy(shaderPath, toGenericPath(shaderNode.attribute("path").as_string()).c_str());
 					const pugi::char_t* shaderEntry = shaderNode.attribute("entry").as_string();
 
@@ -2414,10 +2420,14 @@ namespace ed {
 			} else if (type == PipelineItem::ItemType::ComputePass) {
 				ed::pipe::ComputePass* data = new ed::pipe::ComputePass();
 
+				data->Active = true;
+				if (!passNode.attribute("active").empty())
+					data->Active = passNode.attribute("active").as_bool();
+
 				// get shader properties (NOTE: a shader must have TYPE, PATH and ENTRY)
 				for (pugi::xml_node shaderNode : passNode.children("shader")) {
 					// parse path and type
-					pugi::char_t shaderPath[MAX_PATH];
+					pugi::char_t shaderPath[SHADERED_MAX_PATH];
 					strcpy(shaderPath, toGenericPath(shaderNode.attribute("path").as_string()).c_str());
 					const pugi::char_t* shaderEntry = shaderNode.attribute("entry").as_string();
 
@@ -2522,7 +2532,7 @@ namespace ed {
 				// get shader properties (NOTE: a shader must have TYPE, PATH and ENTRY)
 				for (pugi::xml_node shaderNode : passNode.children("shader")) {
 					// parse path and type
-					pugi::char_t shaderPath[MAX_PATH];
+					pugi::char_t shaderPath[SHADERED_MAX_PATH];
 					strcpy(shaderPath, toGenericPath(shaderNode.attribute("path").as_string()).c_str());
 
 					strcpy(data->Path, shaderPath);
@@ -2605,15 +2615,15 @@ namespace ed {
 				// add the item
 				m_pipe->AddAudioPass(name, data);
 			} else if (type == PipelineItem::ItemType::PluginItem) {
-				IPlugin* plugin = m_plugins->GetPlugin(passNode.attribute("plugin").as_string());
+				IPlugin1* plugin = m_plugins->GetPlugin(passNode.attribute("plugin").as_string());
 				std::string otype(passNode.attribute("itemtype").as_string());
 
-				void* pluginData = plugin->ImportPipelineItem(nullptr, name, otype.c_str(), getInnerXML(passNode.child("data")).c_str());
+				void* pluginData = plugin->PipelineItem_Import(nullptr, name, otype.c_str(), getInnerXML(passNode.child("data")).c_str());
 
 				// add the item
 				m_pipe->AddPluginItem(nullptr, name, otype.c_str(), pluginData, plugin);
 
-				m_importItems(name, nullptr, passNode.child("items"), m_plugins->BuildInputLayout(plugin, name), geoUBOs, modelUBOs, vbUBOs);
+				m_importItems(name, nullptr, passNode.child("items"), m_plugins->BuildInputLayout(plugin, otype.c_str(), pluginData), geoUBOs, modelUBOs, vbUBOs);
 			}
 		}
 
@@ -2645,27 +2655,35 @@ namespace ed {
 			const pugi::char_t* objType = objectNode.attribute("type").as_string();
 
 			if (strcmp(objType, "texture") == 0) {
-				pugi::char_t name[MAX_PATH];
+				pugi::char_t name[SHADERED_MAX_PATH];
 				bool isCube = false;
-				pugi::char_t cubeLeft[MAX_PATH], cubeRight[MAX_PATH], cubeTop[MAX_PATH],
-					cubeBottom[MAX_PATH], cubeFront[MAX_PATH], cubeBack[MAX_PATH];
+				bool isKeyboardTexture = false;
+				pugi::char_t cubeLeft[SHADERED_MAX_PATH], cubeRight[SHADERED_MAX_PATH], cubeTop[SHADERED_MAX_PATH],
+					cubeBottom[SHADERED_MAX_PATH], cubeFront[SHADERED_MAX_PATH], cubeBack[SHADERED_MAX_PATH];
+				
 				if (!objectNode.attribute("cube").empty())
 					isCube = objectNode.attribute("cube").as_bool();
+				if (!objectNode.attribute("keyboard_texture").empty())
+					isKeyboardTexture = objectNode.attribute("keyboard_texture").as_bool();
+
+				if (isCube || isKeyboardTexture)
+					strcpy(name, objectNode.attribute("name").as_string());
+				else
+					strcpy(name, toGenericPath(objectNode.attribute("path").as_string()).c_str());
 
 				if (isCube) {
-					strcpy(name, objectNode.attribute("name").as_string());
-
 					strcpy(cubeLeft, toGenericPath(objectNode.attribute("left").as_string()).c_str());
 					strcpy(cubeTop, toGenericPath(objectNode.attribute("top").as_string()).c_str());
 					strcpy(cubeFront, toGenericPath(objectNode.attribute("front").as_string()).c_str());
 					strcpy(cubeBottom, toGenericPath(objectNode.attribute("bottom").as_string()).c_str());
 					strcpy(cubeRight, toGenericPath(objectNode.attribute("right").as_string()).c_str());
 					strcpy(cubeBack, toGenericPath(objectNode.attribute("back").as_string()).c_str());
-				} else
-					strcpy(name, toGenericPath(objectNode.attribute("path").as_string()).c_str());
+				}
 
 				if (isCube)
 					m_objects->CreateCubemap(name, cubeLeft, cubeTop, cubeFront, cubeBottom, cubeRight, cubeBack);
+				else if (isKeyboardTexture)
+					m_objects->CreateKeyboardTexture(name);
 				else
 					m_objects->CreateTexture(name);
 
@@ -2819,6 +2837,10 @@ namespace ed {
 				m_objects->CreateImage(objName);
 				ImageObject* iobj = m_objects->GetImage(objName);
 
+				// data path
+				if (!objectNode.attribute("data").empty())
+					strcpy(iobj->DataPath, objectNode.attribute("data").as_string());
+
 				// load format
 				if (!objectNode.attribute("format").empty()) {
 					auto formatName = objectNode.attribute("format").as_string();
@@ -2922,7 +2944,7 @@ namespace ed {
 					}
 				}
 			} else if (strcmp(objType, "audio") == 0) {
-				pugi::char_t objPath[MAX_PATH];
+				pugi::char_t objPath[SHADERED_MAX_PATH];
 				strcpy(objPath, toGenericPath(objectNode.attribute("path").as_string()).c_str());
 
 				m_objects->CreateAudio(std::string(objPath));
@@ -2984,12 +3006,12 @@ namespace ed {
 			} else if (strcmp(objType, "pluginobject") == 0) {
 				const pugi::char_t* objName = objectNode.attribute("name").as_string();
 
-				IPlugin* plugin = m_plugins->GetPlugin(objectNode.attribute("plugin").as_string());
+				IPlugin1* plugin = m_plugins->GetPlugin(objectNode.attribute("plugin").as_string());
 				std::string otype(objectNode.attribute("objecttype").as_string());
 
-				plugin->ImportObject(objName, otype.c_str(), getInnerXML(objectNode).c_str());
+				plugin->Object_Import(objName, otype.c_str(), getInnerXML(objectNode).c_str());
 
-				if (plugin->IsObjectBindableUAV(otype.c_str())) {
+				if (plugin->Object_IsBindableUAV(otype.c_str())) {
 					for (pugi::xml_node bindNode : objectNode.children("bind")) {
 						const pugi::char_t* passBindName = bindNode.attribute("name").as_string();
 						int slot = bindNode.attribute("slot").as_int();
@@ -3189,6 +3211,24 @@ namespace ed {
 						!settingItem.attribute("cond").empty() ? settingItem.attribute("cond").as_string() : "",
 						settingItem.attribute("enabled").as_bool());
 				}
+			}
+		}
+
+		// plugin additional data
+		for (pugi::xml_node pluginDataEntry : projectNode.child("plugindata").children("entry")) {
+			std::string plName = "";
+			if (!pluginDataEntry.attribute("owner").empty())
+				plName = pluginDataEntry.attribute("owner").as_string();
+
+			IPlugin1* pl = m_plugins->GetPlugin(plName.c_str());
+			
+			if (pl) {
+				const auto& plName = m_plugins->GetPluginName(pl);
+				if (std::count(m_pluginList.begin(), m_pluginList.end(), plName) == 0)
+					m_pluginList.push_back(plName);
+
+				std::string innerXML = getInnerXML(pluginDataEntry);
+				pl->Project_ImportAdditionalData(innerXML.c_str());
 			}
 		}
 

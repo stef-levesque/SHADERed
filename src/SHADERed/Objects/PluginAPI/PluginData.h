@@ -51,7 +51,7 @@ namespace ed {
 
 		class InputLayoutItem {
 		public:
-			InputLayoutValue Value;
+			ed::plugin::InputLayoutValue Value;
 			char Semantic[64];
 		};
 
@@ -73,12 +73,50 @@ namespace ed {
 			Selection,
 			ErrorMarker,
 			Breakpoint,
+			BreakpointOutline,
+			CurrentLineIndicator,
+			CurrentLineIndicatorOutline,
 			LineNumber,
 			CurrentLineFill,
 			CurrentLineFillInactive,
 			CurrentLineEdge,
 			ErrorMessage,
+			BreakpointDisabled,
+			UserFunction,
+			UserType,
+			UniformVariable,
+			GlobalVariable,
+			LocalVariable,
+			FunctionArgument,
 			Max
+		};
+
+		enum class ShaderStage {
+			Vertex,
+			Pixel,
+			Geometry,
+			Compute,
+			Audio,
+			Plugin,
+			Count
+		};
+
+		struct ShaderMacro {
+			bool Active;
+			char Name[32];
+			char Value[512];
+		};
+
+		enum class ApplicationEvent
+		{
+			PipelineItemCompiled, /* char* itemName, nullptr */
+			PipelineItemAdded,	  /* char* itemName, nullptr */
+			PipelineItemDeleted,  /* char* itemName, nullptr */
+			PipelineItemRenamed,
+			DebuggerStarted,	  /* char* itemName, void* editor */
+			DebuggerStepped,	  /* int line, nullptr */
+			DebuggerStopped		  /* nullptr, nullptr */
+			/* ETC... */
 		};
 	}
 }
