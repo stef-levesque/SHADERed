@@ -4,13 +4,13 @@
 
 #include <SDL2/SDL.h>
 #include <SHADERed/EditorEngine.h>
+#include <SHADERed/FS.h>
 #include <SHADERed/Objects/CommandLineOptionParser.h>
 #include <SHADERed/Objects/Logger.h>
 #include <SHADERed/Objects/Settings.h>
 #include <glslang/Public/ShaderLang.h>
 
 #include <chrono>
-#include <ghc/filesystem.hpp>
 #include <fstream>
 #include <thread>
 #include <string>
@@ -44,23 +44,23 @@ int main(int argc, char* argv[])
 {
 	srand(time(NULL));
 
-	ghc::filesystem::path cmdDir = ghc::filesystem::current_path();
+	fs::path cmdDir = fs::current_path();
 
 	if (argc > 0) {
 #if defined(__APPLE__)
 		// check if we are running from .app
-		if (ghc::filesystem::exists(ghc::filesystem::path(argv[0]).parent_path().append("../Resources"))) {
-			ghc::filesystem::current_path(ghc::filesystem::path(argv[0]).parent_path().append("../Resources"));
+		if (fs::exists(fs::path(argv[0]).parent_path().append("../Resources"))) {
+			fs::current_path(fs::path(argv[0]).parent_path().append("../Resources"));
 
-			ed::Logger::Get().Log("Setting current_path to " + ghc::filesystem::current_path().generic_string());
+			ed::Logger::Get().Log("Setting current_path to " + fs::current_path().generic_string());
 
 		}
 		else
 #endif
-		if (ghc::filesystem::exists(ghc::filesystem::path(argv[0]).parent_path())) {
-			ghc::filesystem::current_path(ghc::filesystem::path(argv[0]).parent_path());
+		if (fs::exists(fs::path(argv[0]).parent_path())) {
+			fs::current_path(fs::path(argv[0]).parent_path());
 
-			ed::Logger::Get().Log("Setting current_path to " + ghc::filesystem::current_path().generic_string());
+			ed::Logger::Get().Log("Setting current_path to " + fs::current_path().generic_string());
 
 		}
 	}
@@ -89,10 +89,10 @@ int main(int argc, char* argv[])
 		};
 
 		for (const auto& wrkpath : toCheck) {
-			if (ghc::filesystem::exists(exePath + wrkpath)) {
+			if (fs::exists(exePath + wrkpath)) {
 				linuxUseHomeDir = true;
-				ghc::filesystem::current_path(exePath + wrkpath);
-				ed::Logger::Get().Log("Setting current_path to " + ghc::filesystem::current_path().generic_string());
+				fs::current_path(exePath + wrkpath);
+				ed::Logger::Get().Log("Setting current_path to " + fs::current_path().generic_string());
 				break;
 			}
 		}
@@ -109,34 +109,34 @@ int main(int argc, char* argv[])
 		if (homedir != NULL) {
 			ed::Settings::Instance().LinuxHomeDirectory = std::string(homedir) + homedirSuffix + "/shadered/";
 
-			if (!ghc::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory))
-				ghc::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory);
-			if (!ghc::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "data"))
-				ghc::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "data");
-			if (!ghc::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "themes"))
-				ghc::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "themes");
-			if (!ghc::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "plugins"))
-				ghc::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "plugins");
+			if (!fs::exists(ed::Settings::Instance().LinuxHomeDirectory))
+				fs::create_directory(ed::Settings::Instance().LinuxHomeDirectory);
+			if (!fs::exists(ed::Settings::Instance().LinuxHomeDirectory + "data"))
+				fs::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "data");
+			if (!fs::exists(ed::Settings::Instance().LinuxHomeDirectory + "themes"))
+				fs::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "themes");
+			if (!fs::exists(ed::Settings::Instance().LinuxHomeDirectory + "plugins"))
+				fs::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "plugins");
 		}
 	}
 #endif
 
 	// create data directory on startup
-	if (!ghc::filesystem::exists("./data/"))
-		ghc::filesystem::create_directory("./data/");
-	if (!ed::Settings::Instance().LinuxHomeDirectory.empty() && !ghc::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "data/"))
-		ghc::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "data/");
+	if (!fs::exists("./data/"))
+		fs::create_directory("./data/");
+	if (!ed::Settings::Instance().LinuxHomeDirectory.empty() && !fs::exists(ed::Settings::Instance().LinuxHomeDirectory + "data/"))
+		fs::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "data/");
 
 	// create temp directory
-	if (!ghc::filesystem::exists("./temp/"))
-		ghc::filesystem::create_directory("./temp/");
-	if (!ed::Settings::Instance().LinuxHomeDirectory.empty() && !ghc::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "temp/"))
-		ghc::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "temp/");
+	if (!fs::exists("./temp/"))
+		fs::create_directory("./temp/");
+	if (!ed::Settings::Instance().LinuxHomeDirectory.empty() && !fs::exists(ed::Settings::Instance().LinuxHomeDirectory + "temp/"))
+		fs::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "temp/");
 
 	// delete log.txt on startup
-	if (ghc::filesystem::exists("./log.txt")) {
+	if (fs::exists("./log.txt")) {
 		std::error_code errCode;
-		ghc::filesystem::remove("./log.txt", errCode);
+		fs::remove("./log.txt", errCode);
 	}
 
 	// set stb_image flags
@@ -162,7 +162,7 @@ int main(int argc, char* argv[])
 
 	// load window size
 	std::string preloadDatPath = "data/preload.dat";
-	if (!ed::Settings::Instance().LinuxHomeDirectory.empty() && ghc::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + preloadDatPath))
+	if (!ed::Settings::Instance().LinuxHomeDirectory.empty() && fs::exists(ed::Settings::Instance().LinuxHomeDirectory + preloadDatPath))
 		preloadDatPath = ed::Settings::Instance().LinuxHomeDirectory + preloadDatPath;
 	short wndWidth = 800, wndHeight = 600, wndPosX = -1, wndPosY = -1;
 	bool fullscreen = false, maximized = false, perfMode = false;
@@ -192,7 +192,7 @@ int main(int argc, char* argv[])
 		ed::Logger::Get().Log("Deleting data/workspace.dat", true);
 
 		std::error_code errCode;
-		ghc::filesystem::remove("./data/workspace.dat", errCode);
+		fs::remove("./data/workspace.dat", errCode);
 	}
 
 	// apply parsed CL options

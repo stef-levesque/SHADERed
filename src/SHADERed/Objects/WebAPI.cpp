@@ -1,3 +1,4 @@
+#include <SHADERed/FS.h>
 #include <SHADERed/Objects/WebAPI.h>
 #include <SHADERed/Objects/Logger.h>
 #include <SHADERed/Objects/Settings.h>
@@ -6,7 +7,6 @@
 #include <pugixml/src/pugixml.hpp>
 #include <miniz/zip_file.hpp>
 
-#include <ghc/filesystem.hpp>
 #include <fstream>
 #include <random>
 
@@ -315,8 +315,8 @@ namespace ed {
 
 		// first clear the old data and create new directory
 		std::error_code ec;
-		ghc::filesystem::remove_all(outputPath, ec);
-		ghc::filesystem::create_directory(outputPath);
+		fs::remove_all(outputPath, ec);
+		fs::create_directory(outputPath);
 
 		sf::Http http(WebAPI::URL, 16001);
 		sf::Http::Request request;
@@ -332,7 +332,7 @@ namespace ed {
 				miniz_cpp::zip_info fileInfo = zipFile.getinfo(files[i]);
 
 				if (fileInfo.flag_bits == 0 && fileInfo.file_size == 0)
-					ghc::filesystem::create_directories(ghc::filesystem::path(outputPath) / fileInfo.filename);
+					fs::create_directories(fs::path(outputPath) / fileInfo.filename);
 			}
 			zipFile.extractall(outputPath);
 
@@ -430,7 +430,7 @@ namespace ed {
 				miniz_cpp::zip_info fileInfo = zipFile.getinfo(files[i]);
 
 				if (fileInfo.flag_bits == 0 && fileInfo.file_size == 0)
-					ghc::filesystem::create_directories(ghc::filesystem::path(outputDir) / fileInfo.filename);
+					fs::create_directories(fs::path(outputDir) / fileInfo.filename);
 			}
 			zipFile.extractall(outputDir);
 		}

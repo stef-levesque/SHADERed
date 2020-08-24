@@ -1,3 +1,4 @@
+#include <SHADERed/FS.h>
 #include <SHADERed/Objects/KeyboardShortcuts.h>
 #include <SHADERed/Objects/Logger.h>
 #include <SHADERed/Objects/Settings.h>
@@ -12,7 +13,6 @@
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 #include <algorithm>
-#include <ghc/filesystem.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #define REFRESH_BUTTON_SPACE Settings::Instance().CalculateSize(-80)
@@ -83,7 +83,7 @@ namespace ed {
 		if (igfd::ImGuiFileDialog::Instance()->FileDialog("OptionsFontDlg")) {
 			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
 				std::string file = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
-				file = ghc::filesystem::relative(file).generic_string();
+				file = fs::relative(file).generic_string();
 				strcpy(m_dialogPath, file.c_str());
 			}
 			igfd::ImGuiFileDialog::Instance()->CloseDialog("OptionsFontDlg");
@@ -225,8 +225,8 @@ namespace ed {
 			pathList.push_back(Settings().Instance().LinuxHomeDirectory + "themes/");
 
 		for (const auto& pathToCheck : pathList) {
-			if (ghc::filesystem::exists(pathToCheck)) {
-				for (const auto& entry : ghc::filesystem::directory_iterator(pathToCheck)) {
+			if (fs::exists(pathToCheck)) {
+				for (const auto& entry : fs::directory_iterator(pathToCheck)) {
 					m_themes.push_back(ThemeContainer::Instance().LoadTheme(entry.path().generic_string()));
 				}
 			}
@@ -378,7 +378,7 @@ namespace ed {
 		ImGui::SameLine();
 		ImGui::PushItemWidth(-1);
 		if (ImGui::BeginCombo("##optg_template", settings->General.StartUpTemplate.c_str())) {
-			for (const auto& entry : ghc::filesystem::directory_iterator("./templates")) {
+			for (const auto& entry : fs::directory_iterator("./templates")) {
 				std::string file = entry.path().filename().string();
 				if (file[0] != '.' && ImGui::Selectable(file.c_str(), file == settings->General.StartUpTemplate))
 					settings->General.StartUpTemplate = file;

@@ -1,10 +1,10 @@
+#include <SHADERed/FS.h>
 #include <SHADERed/Engine/GeometryFactory.h>
 #include <SHADERed/Objects/Export/ExportCPP.h>
 #include <SHADERed/Objects/Names.h>
 #include <SHADERed/Objects/ShaderCompiler.h>
 #include <SHADERed/Objects/SystemVariableManager.h>
 
-#include <ghc/filesystem.hpp>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -58,7 +58,7 @@ namespace ed {
 	}
 	std::string getFilename(const std::string& filename)
 	{
-		std::string ret = ghc::filesystem::path(filename).filename().string();
+		std::string ret = fs::path(filename).filename().string();
 
 		size_t dotPos = ret.find_last_of('.');
 		ret = ret.substr(0, dotPos);
@@ -327,40 +327,40 @@ namespace ed {
 		bool usesGeometry[pipe::GeometryItem::GeometryType::Count] = { false };
 		bool usesTextures = false;
 
-		if (!ghc::filesystem::exists("data/export/cpp/template.cpp"))
+		if (!fs::exists("data/export/cpp/template.cpp"))
 			return false;
 
-		if (exportCmakeFiles && !ghc::filesystem::exists("data/export/cpp/CMakeLists.txt"))
+		if (exportCmakeFiles && !fs::exists("data/export/cpp/CMakeLists.txt"))
 			return false;
 
-		if (copyCMakeModules && !ghc::filesystem::exists("data/export/cpp/FindGLM.cmake"))
+		if (copyCMakeModules && !fs::exists("data/export/cpp/FindGLM.cmake"))
 			return false;
 
-		if (copySTBImage && !ghc::filesystem::exists("data/export/cpp/stb_image.h"))
+		if (copySTBImage && !fs::exists("data/export/cpp/stb_image.h"))
 			return false;
 
-		ghc::filesystem::path parentPath = ghc::filesystem::path(outPath).parent_path();
+		fs::path parentPath = fs::path(outPath).parent_path();
 
 		// copy CMakeLists.txt
 		if (exportCmakeFiles) {
 			std::string cmakeLists = loadFile("data/export/cpp/CMakeLists.txt");
 			replaceSections(cmakeLists, "project_name", cmakeProject);
-			replaceSections(cmakeLists, "project_file", ghc::filesystem::path(outPath).filename());
+			replaceSections(cmakeLists, "project_file", fs::path(outPath).filename());
 
 			std::ofstream outCmake(parentPath / "CMakeLists.txt");
 			outCmake << cmakeLists;
 			outCmake.close();
 		}
 		if (copyCMakeModules) {
-			if (!ghc::filesystem::exists(parentPath / "cmake"))
-				ghc::filesystem::create_directory(parentPath / "cmake");
+			if (!fs::exists(parentPath / "cmake"))
+				fs::create_directory(parentPath / "cmake");
 
-			ghc::filesystem::path cmakePath("data/export/cpp/FindGLM.cmake");
-			ghc::filesystem::copy_file(cmakePath, parentPath / "cmake/FindGLM.cmake", ghc::filesystem::copy_options::skip_existing);
+			fs::path cmakePath("data/export/cpp/FindGLM.cmake");
+			fs::copy_file(cmakePath, parentPath / "cmake/FindGLM.cmake", fs::copy_options::skip_existing);
 		}
 		if (copySTBImage) {
-			ghc::filesystem::path cmakePath("data/export/cpp/stb_image.h");
-			ghc::filesystem::copy_file(cmakePath, parentPath / "stb_image.h", ghc::filesystem::copy_options::skip_existing);
+			fs::path cmakePath("data/export/cpp/stb_image.h");
+			fs::copy_file(cmakePath, parentPath / "stb_image.h", fs::copy_options::skip_existing);
 		}
 
 		// load template code data
@@ -431,7 +431,7 @@ namespace ed {
 			if (externalShaders) {
 				initSrc += indent + "// shaders\n";
 				for (int i = 0; i < allShaderFiles.size(); i++) {
-					std::string shdrFile = ghc::filesystem::path(allShaderFiles[i]).filename();
+					std::string shdrFile = fs::path(allShaderFiles[i]).filename();
 
 					initSrc += indent + "std::string " + getShaderFilename(allShaderFiles[i]) + " = LoadFile(\"" + shdrFile + "\");\n";
 
@@ -516,14 +516,14 @@ namespace ed {
 					std::string actualName = data->Objects.GetItemNameByTextureID(objItems[i]->Texture);
 					std::string texName = actualName;
 					if (texName.find('\\') != std::string::npos || texName.find('/') != std::string::npos || texName.find('.') != std::string::npos) {
-						texName = ghc::filesystem::path(texName).filename().string();
+						texName = fs::path(texName).filename().string();
 					}
 					texName = getFilename(texName);
 
-					initSrc += indent + "GLuint " + texName + " = LoadTexture(\"" + std::string(ghc::filesystem::path(actualName).filename()) + "\");\n\n";
+					initSrc += indent + "GLuint " + texName + " = LoadTexture(\"" + std::string(fs::path(actualName).filename()) + "\");\n\n";
 
 					if (copyImages)
-						ghc::filesystem::copy_file(data->Parser.GetProjectPath(actualName), parentPath / ghc::filesystem::path(actualName).filename(), ghc::filesystem::copy_options::skip_existing);
+						fs::copy_file(data->Parser.GetProjectPath(actualName), parentPath / fs::path(actualName).filename(), fs::copy_options::skip_existing);
 				}
 			}
 
@@ -676,7 +676,7 @@ namespace ed {
 						std::string actualName = data->Objects.GetItemNameByTextureID(srvs[j]);
 						std::string texName = actualName;
 						if (texName.find('\\') != std::string::npos || texName.find('/') != std::string::npos || texName.find('.') != std::string::npos) {
-							texName = ghc::filesystem::path(texName).filename().string();
+							texName = fs::path(texName).filename().string();
 						}
 						texName = getFilename(texName);
 

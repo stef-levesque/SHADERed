@@ -1,5 +1,6 @@
 #include <SHADERed/GUIManager.h>
 #include <SHADERed/InterfaceManager.h>
+#include <SHADERed/FS.h>
 #include <SHADERed/Objects/DefaultState.h>
 #include <SHADERed/Objects/Logger.h>
 #include <SHADERed/Objects/PluginManager.h>
@@ -19,7 +20,6 @@
 #include <vector>
 #include <fstream>
 #include <algorithm>
-#include <ghc/filesystem.hpp>
 
 #if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
 #include <dlfcn.h>
@@ -55,7 +55,7 @@ namespace ed {
 		if (!ed::Settings::Instance().LinuxHomeDirectory.empty())
 			pluginsDirLoc = ed::Settings::Instance().LinuxHomeDirectory + "plugins/";
 
-		if (!ghc::filesystem::exists(pluginsDirLoc)) {
+		if (!fs::exists(pluginsDirLoc)) {
 			ed::Logger::Get().Log("Directory for plugins doesn't exist");
 			return;
 		}
@@ -79,7 +79,7 @@ namespace ed {
 		std::vector<std::string> allNames;
 		std::vector<std::string>& notLoaded = Settings::Instance().Plugins.NotLoaded;
 
-		for (const auto& entry : ghc::filesystem::directory_iterator(pluginsDirLoc)) {
+		for (const auto& entry : fs::directory_iterator(pluginsDirLoc)) {
 			if (entry.is_directory()) {
 				std::string pdir = entry.path().filename().string();
 

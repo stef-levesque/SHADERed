@@ -1,6 +1,7 @@
 #include <SDL2/SDL_messagebox.h>
 #include <SHADERed/GUIManager.h>
 #include <SHADERed/InterfaceManager.h>
+#include <SHADERed/FS.h>
 #include <SHADERed/Objects/CameraSnapshots.h>
 #include <SHADERed/Objects/Export/ExportCPP.h>
 #include <SHADERed/Objects/FunctionVariableManager.h>
@@ -35,7 +36,6 @@
 #include <imgui/imgui.h>
 #include <ImGuiFileDialog/ImGuiFileDialog.h>
 
-#include <ghc/filesystem.hpp>
 #include <fstream>
 
 #include <stb/stb_image.h>
@@ -45,8 +45,6 @@
 #define STBIR_DEFAULT_FILTER_DOWNSAMPLE STBIR_FILTER_CATMULLROM
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include <stb/stb_image_resize.h>
-
-#include <ghc/filesystem.hpp>
 
 #if defined(__APPLE__)
 // no includes on mac os
@@ -151,7 +149,7 @@ namespace ed {
 		io.ConfigDockingWithShift = false;
 
 		if (!ed::Settings::Instance().LinuxHomeDirectory.empty()) {
-			if (!ghc::filesystem::exists(m_uiIniFile) && ghc::filesystem::exists("data/workspace.dat"))
+			if (!fs::exists(m_uiIniFile) && fs::exists("data/workspace.dat"))
 				ImGui::LoadIniSettingsFromDisk("data/workspace.dat");
 		}
 
@@ -405,19 +403,19 @@ namespace ed {
 			fonts->Clear();
 
 			ImFont* font = nullptr;
-			if (ghc::filesystem::exists(m_cachedFont))
+			if (fs::exists(m_cachedFont))
 				font = fonts->AddFontFromFileTTF(m_cachedFont.c_str(), m_cachedFontSize * Settings::Instance().DPIScale);
 
 			// icon font
 			static const ImWchar icon_ranges[] = { 0xea5b, 0xf026, 0 };
-			if (font && ghc::filesystem::exists("data/icofont.ttf")) {
+			if (font && fs::exists("data/icofont.ttf")) {
 				ImFontConfig config;
 				config.MergeMode = true;
 				fonts->AddFontFromFileTTF("data/icofont.ttf", m_cachedFontSize * Settings::Instance().DPIScale, &config, icon_ranges);
 			}
 
 			ImFont* edFontPtr = nullptr;
-			if (ghc::filesystem::exists(edFont.first))
+			if (fs::exists(edFont.first))
 				edFontPtr = fonts->AddFontFromFileTTF(edFont.first.c_str(), edFont.second * Settings::Instance().DPIScale);
 
 			if (font == nullptr || edFontPtr == nullptr) {
@@ -429,7 +427,7 @@ namespace ed {
 			}
 
 			// icon font large
-			if (ghc::filesystem::exists("data/icofont.ttf")) {
+			if (fs::exists("data/icofont.ttf")) {
 				ImFontConfig configIconsLarge;
 				m_iconFontLarge = ImGui::GetIO().Fonts->AddFontFromFileTTF("data/icofont.ttf", Settings::Instance().CalculateSize(TOOLBAR_HEIGHT / 2), &configIconsLarge, icon_ranges);
 			}
@@ -655,8 +653,8 @@ namespace ed {
 				if (ImGui::BeginMenu("Open Recent")) {
 					int recentCount = 0;
 					for (int i = 0; i < m_recentProjects.size(); i++) {
-						ghc::filesystem::path path(m_recentProjects[i]);
-						if (!ghc::filesystem::exists(path))
+						fs::path path(m_recentProjects[i]);
+						if (!fs::exists(path))
 							continue;
 
 						recentCount++;
@@ -1410,7 +1408,7 @@ namespace ed {
 			static std::string left, top, front, bottom, right, back;
 			float btnWidth = Settings::Instance().CalculateSize(65.0f);
 
-			ImGui::Text("Left: %s", ghc::filesystem::path(left).filename().string().c_str());
+			ImGui::Text("Left: %s", fs::path(left).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##left")) {
@@ -1418,7 +1416,7 @@ namespace ed {
 				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - left", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
-			ImGui::Text("Top: %s", ghc::filesystem::path(top).filename().string().c_str());
+			ImGui::Text("Top: %s", fs::path(top).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##top")) {
@@ -1426,7 +1424,7 @@ namespace ed {
 				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - top", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
-			ImGui::Text("Front: %s", ghc::filesystem::path(front).filename().string().c_str());
+			ImGui::Text("Front: %s", fs::path(front).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##front")) {
@@ -1434,7 +1432,7 @@ namespace ed {
 				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - front", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
-			ImGui::Text("Bottom: %s", ghc::filesystem::path(bottom).filename().string().c_str());
+			ImGui::Text("Bottom: %s", fs::path(bottom).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##bottom")) {
@@ -1442,7 +1440,7 @@ namespace ed {
 				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - bottom", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
-			ImGui::Text("Right: %s", ghc::filesystem::path(right).filename().string().c_str());
+			ImGui::Text("Right: %s", fs::path(right).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##right")) {
@@ -1450,7 +1448,7 @@ namespace ed {
 				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - right", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
-			ImGui::Text("Back: %s", ghc::filesystem::path(back).filename().string().c_str());
+			ImGui::Text("Back: %s", fs::path(back).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##back")) {
@@ -3193,8 +3191,8 @@ namespace ed {
 
 		Logger::Get().Log("Loading template list");
 
-		if (ghc::filesystem::exists("./templates/")) {
-			for (const auto& entry : ghc::filesystem::directory_iterator("./templates/")) {
+		if (fs::exists("./templates/")) {
+			for (const auto& entry : fs::directory_iterator("./templates/")) {
 				std::string file = entry.path().filename().string();
 				m_templates.push_back(file);
 

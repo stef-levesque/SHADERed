@@ -1,5 +1,6 @@
 #pragma once
 #include <ImGuiColorTextEdit/TextEditor.h>
+#include <SHADERed/FS.h>
 #include <SHADERed/Objects/Logger.h>
 #include <SHADERed/Objects/PipelineItem.h>
 #include <SHADERed/Objects/Settings.h>
@@ -13,7 +14,6 @@
 #include <deque>
 #include <future>
 #include <shared_mutex>
-#include <ghc/filesystem.hpp>
 
 namespace ed {
 	struct CodeSnippet {

@@ -2,6 +2,7 @@
 #include <SHADERed/Engine/GLUtils.h>
 #include <SHADERed/Engine/GeometryFactory.h>
 #include <SHADERed/Engine/Model.h>
+#include <SHADERed/FS.h>
 #include <SHADERed/Objects/Logger.h>
 #include <SHADERed/Objects/Names.h>
 #include <SHADERed/Objects/Settings.h>
@@ -13,7 +14,6 @@
 
 #include <ImGuiFileDialog/ImGuiFileDialog.h>
 
-#include <ghc/filesystem.hpp>
 #include <fstream>
 #include <string.h>
 #include <glm/gtc/type_ptr.hpp>
@@ -877,10 +877,10 @@ namespace ed {
 	{
 		std::string fname = m_data->Parser.GetProjectPath(filename);
 
-		if (!ghc::filesystem::exists(fname)) {
-			ghc::filesystem::path path(fname);
+		if (!fs::exists(fname)) {
+			fs::path path(fname);
 			if (path.has_parent_path())
-				ghc::filesystem::create_directories(path.parent_path());
+				fs::create_directories(path.parent_path());
 			std::ofstream shdr(fname);
 			shdr << "// empty shader file\n";
 			shdr.close();
