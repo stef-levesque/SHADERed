@@ -56,6 +56,7 @@ namespace ed {
 		glm::ivec2 Size;
 		GLuint Format;
 		GLuint Texture;
+		char DataPath[SHADERED_MAX_PATH];
 	};
 
 	struct Image3DObject {
@@ -66,7 +67,7 @@ namespace ed {
 
 	struct PluginObject {
 		char Type[128];
-		IPlugin* Owner;
+		IPlugin1* Owner;
 
 		GLuint ID;
 		void* Data;
@@ -82,6 +83,7 @@ namespace ed {
 			FlippedTexture = 0;
 			IsCube = false;
 			IsTexture = false;
+			IsKeyboardTexture = false;
 			Texture_VFlipped = false;
 			Texture_MinFilter = GL_LINEAR;
 			Texture_MagFilter = GL_NEAREST;
@@ -124,14 +126,11 @@ namespace ed {
 				delete SoundBuffer;
 				delete Sound;
 			}
-			if (Plugin != nullptr) {
+			if (Plugin != nullptr)
 				delete Plugin;
-			}
 
-			if (Texture != 0)
-				glDeleteTextures(1, &Texture);
-			if (FlippedTexture != 0)
-				glDeleteTextures(1, &FlippedTexture);
+			glDeleteTextures(1, &Texture);
+			glDeleteTextures(1, &FlippedTexture);
 			CubemapPaths.clear();
 		}
 
@@ -139,6 +138,7 @@ namespace ed {
 		GLuint Texture, FlippedTexture;
 		bool IsCube;
 		bool IsTexture;
+		bool IsKeyboardTexture;
 		std::vector<std::string> CubemapPaths;
 
 		bool Texture_VFlipped;
@@ -168,8 +168,10 @@ namespace ed {
 		bool CreateBuffer(const std::string& file);
 		bool CreateImage(const std::string& name, glm::ivec2 size = glm::ivec2(1, 1));
 		bool CreateImage3D(const std::string& name, glm::ivec3 size = glm::ivec3(1, 1, 1));
-		bool CreatePluginItem(const std::string& name, const std::string& objtype, void* data, GLuint id, IPlugin* owner);
-
+		bool CreatePluginItem(const std::string& name, const std::string& objtype, void* data, GLuint id, IPlugin1* owner);
+		bool CreateKeyboardTexture(const std::string& name);
+		
+		void OnEvent(const SDL_Event& e);
 		void Update(float delta);
 
 		void Pause(bool pause);
@@ -192,6 +194,9 @@ namespace ed {
 		bool IsImage(GLuint id);
 		bool IsCubeMap(GLuint id);
 
+		void UploadDataToImage(ImageObject* img, GLuint tex, glm::ivec2 texSize);
+		void SaveToFile(const std::string& itemName, ObjectManagerItem* item, const std::string& filepath);
+
 		void ResizeRenderTexture(const std::string& name, glm::ivec2 size);
 		void ResizeImage(const std::string& name, glm::ivec2 size);
 		void ResizeImage3D(const std::string& name, glm::ivec3 size);
@@ -199,6 +204,8 @@ namespace ed {
 		bool LoadBufferFromTexture(BufferObject* buf, const std::string& str, bool convertToFloat = false);
 		bool LoadBufferFromModel(BufferObject* buf, const std::string& str);
 		bool LoadBufferFromFile(BufferObject* buf, const std::string& str);
+
+		bool ReloadTexture(ObjectManagerItem* item, const std::string& newPath);
 
 		void Clear();
 
@@ -215,6 +222,8 @@ namespace ed {
 		PluginObject* GetPluginObject(const std::string& name);
 		glm::ivec2 GetImageSize(const std::string& name);
 		glm::ivec3 GetImage3DSize(const std::string& name);
+
+		bool HasKeyboardTexture();
 
 		PluginObject* GetPluginObject(GLuint id);
 		std::string GetBufferNameByID(int id);
@@ -270,6 +279,8 @@ namespace ed {
 
 		ed::AudioAnalyzer m_audioAnalyzer;
 		float m_audioTempTexData[ed::AudioAnalyzer::SampleCount * 2];
+
+		unsigned char m_kbTexture[256 * 3];
 
 		std::unordered_map<PipelineItem*, std::vector<GLuint>> m_binds;
 		std::unordered_map<PipelineItem*, std::vector<GLuint>> m_uniformBinds;

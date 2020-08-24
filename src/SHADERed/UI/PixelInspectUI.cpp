@@ -32,7 +32,7 @@ namespace ed {
 		int pxId = 0;
 		for (auto& pixel : pixels) {
 			/* [PASS NAME, RT NAME, OBJECT NAME, COORDINATE] */
-			ImGui::Text("%s(%s) - %s at (%d,%d)", pixel.Pass->Name, pixel.RenderTexture.empty() ? "Window" : pixel.RenderTexture.c_str(), pixel.Object->Name, pixel.Coordinate.x, pixel.Coordinate.y);
+			ImGui::Text("%s(%s) - %s@(%d,%d)", pixel.Pass->Name, pixel.RenderTexture.empty() ? "Window" : pixel.RenderTexture.c_str(), pixel.Object->Name, pixel.Coordinate.x, pixel.Coordinate.y);
 			
 			/* [PIXEL COLOR] */
 			ImGui::PushItemWidth(-1);
@@ -55,16 +55,35 @@ namespace ed {
 				bool requestCompile = false;
 				int initIndex = 0;
 
+				bool vertexShaderEnabled = true, pixelShaderEnabled = true;
+				if (pixel.Pass->Type == PipelineItem::ItemType::PluginItem) {
+					pipe::PluginItemData* plData = (pipe::PluginItemData*)pixel.Pass->Data;
+					vertexShaderEnabled = plData->Owner->PipelineItem_IsStageDebuggable(plData->Type, plData->PluginData, ed::plugin::ShaderStage::Vertex);
+					pixelShaderEnabled = plData->Owner->PipelineItem_IsStageDebuggable(plData->Type, plData->PluginData, ed::plugin::ShaderStage::Pixel);
+				}
 
 				/* [PIXEL] */
+				if (!pixelShaderEnabled) {
+					ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+					ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+				}
 				if (ImGui::Button(((UI_ICON_PLAY "##debug_pixel_") + std::to_string(pxId)).c_str(), ImVec2(ICON_BUTTON_WIDTH, BUTTON_SIZE))
 					&& m_data->Messages.CanRenderPreview()) {
 					pipe::ShaderPass* pass = ((pipe::ShaderPass*)pixel.Pass->Data);
 
 					CodeEditorUI* codeUI = (reinterpret_cast<CodeEditorUI*>(m_ui->Get(ViewID::Code)));
 					codeUI->StopDebugging();
-					codeUI->Open(pixel.Pass, ShaderStage::Pixel);
+					if (pixel.Pass->Type == PipelineItem::ItemType::ShaderPass)
+						codeUI->Open(pixel.Pass, ShaderStage::Pixel);
+					else if (pixel.Pass->Type == PipelineItem::ItemType::PluginItem) {
+						pipe::PluginItemData* plData = ((pipe::PluginItemData*)pixel.Pass->Data);
+						plData->Owner->PipelineItem_OpenInEditor(plData->Type, plData->PluginData);
+					}
 					editor = codeUI->Get(pixel.Pass, ShaderStage::Pixel);
+
+					// for plugins that store vertex and pixel shader in the same file
+					if (editor == nullptr && pixel.Pass->Type == PipelineItem::ItemType::PluginItem)
+						editor = codeUI->Get(pixel.Pass, ShaderStage::Vertex);
 
 					m_data->Debugger.PreparePixelShader(pixel.Pass, pixel.Object);
 					m_data->Debugger.SetPixelShaderInput(pixel);
@@ -80,21 +99,32 @@ namespace ed {
 					ImGui::PopItemFlag();
 					ImGui::PopItemWidth();
 				}
+				if (!pixelShaderEnabled) {
+					ImGui::PopStyleVar();
+					ImGui::PopItemFlag();
+				}
 
 
 				/* [VERTEX] */
+				if (!vertexShaderEnabled) {
+					ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+					ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+				}
 				for (int i = 0; i < pixel.VertexCount; i++) {
 					if (ImGui::Button(((UI_ICON_PLAY "##debug_vertex" + std::to_string(i) + "_") + std::to_string(pxId)).c_str(), ImVec2(ICON_BUTTON_WIDTH, BUTTON_SIZE))
 						&& m_data->Messages.CanRenderPreview()) {
-						pipe::ShaderPass* pass = ((pipe::ShaderPass*)pixel.Pass->Data);
-
 						CodeEditorUI* codeUI = (reinterpret_cast<CodeEditorUI*>(m_ui->Get(ViewID::Code)));
 						codeUI->StopDebugging();
-						codeUI->Open(pixel.Pass, ShaderStage::Vertex);
+						if (pixel.Pass->Type == PipelineItem::ItemType::ShaderPass)
+							codeUI->Open(pixel.Pass, ShaderStage::Vertex);
+						else if (pixel.Pass->Type == PipelineItem::ItemType::PluginItem) {
+							pipe::PluginItemData* plData = ((pipe::PluginItemData*)pixel.Pass->Data);
+							plData->Owner->PipelineItem_OpenInEditor(plData->Type, plData->PluginData);
+						}
 						editor = codeUI->Get(pixel.Pass, ShaderStage::Vertex);
 
 						m_data->Debugger.PrepareVertexShader(pixel.Pass, pixel.Object);
-						m_data->Debugger.SetVertexShaderInput(pass, pixel.Vertex[i], pixel.VertexID + i, pixel.InstanceID, (BufferObject*)pixel.InstanceBuffer);
+						m_data->Debugger.SetVertexShaderInput(pixel.Pass, pixel.Vertex[i], pixel.VertexID + i, pixel.InstanceID, (BufferObject*)pixel.InstanceBuffer);
 						
 						initIndex = i;
 						requestCompile = true;
@@ -102,12 +132,17 @@ namespace ed {
 					ImGui::SameLine();
 					ImGui::Text("Vertex[%d] = (%.2f, %.2f, %.2f)", i, pixel.Vertex[i].Position.x, pixel.Vertex[i].Position.y, pixel.Vertex[i].Position.z);
 				}
+				if (!vertexShaderEnabled) {
+					ImGui::PopStyleVar();
+					ImGui::PopItemFlag();
+				}
 
-				/* [TODO:GEOMETRY SHADER]*/
+
+				/* [TODO:GEOMETRY SHADER] */
 
 
 				/* ACTUAL ACTION HERE */
-				if (requestCompile) {
+				if (requestCompile && editor != nullptr) {
 					CodeEditorUI* codeUI = (reinterpret_cast<CodeEditorUI*>(m_ui->Get(ViewID::Code)));
 
 					m_data->Debugger.SetCurrentFile(editor->GetPath());
@@ -116,6 +151,8 @@ namespace ed {
 				
 					// skip initialization
 					editor->SetCurrentLineIndicator(m_data->Debugger.GetCurrentLine());
+
+					m_data->Plugins.HandleApplicationEvent(ed::plugin::ApplicationEvent::DebuggerStarted, pixel.Pass->Name, (void*)editor);
 
 					// reset function stack
 					((DebugFunctionStackUI*)m_ui->Get(ViewID::DebugFunctionStack))->Refresh();
@@ -129,6 +166,8 @@ namespace ed {
 					editor->OnDebuggerAction = [&](TextEditor* ed, TextEditor::DebugAction act) {
 						if (!m_data->Debugger.IsDebugging())
 							return;
+
+						m_cacheExpression.clear();
 
 						bool state = m_data->Debugger.IsVMRunning();
 						switch (act) {
@@ -152,6 +191,8 @@ namespace ed {
 						if (act == TextEditor::DebugAction::Stop || !state) {
 							m_data->Debugger.SetDebugging(false);
 							ed->SetCurrentLineIndicator(-1);
+
+							m_data->Plugins.HandleApplicationEvent(ed::plugin::ApplicationEvent::DebuggerStopped, nullptr, nullptr);
 						} else {
 							((DebugWatchUI*)m_ui->Get(ViewID::DebugWatch))->Refresh();
 							((DebugFunctionStackUI*)m_ui->Get(ViewID::DebugFunctionStack))->Refresh();
@@ -160,11 +201,15 @@ namespace ed {
 							if (!m_data->Debugger.IsVMRunning())
 								curLine++;
 							ed->SetCurrentLineIndicator(curLine);
+
+							m_data->Plugins.HandleApplicationEvent(ed::plugin::ApplicationEvent::DebuggerStepped, (void*)curLine, nullptr);
 						}
 					};
 					editor->OnDebuggerJump = [&](TextEditor* ed, int line) {
 						if (!m_data->Debugger.IsDebugging())
 							return;
+
+						m_cacheExpression.clear();
 
 						while (m_data->Debugger.IsVMRunning() && m_data->Debugger.GetCurrentLine() != line)
 							spvm_state_step_into(m_data->Debugger.GetVM());
@@ -216,7 +261,7 @@ namespace ed {
 								isTex = true;
 								ImGui::Text("texture");
 
-								if (resType && resType->image_info->dim == SpvDimCube)
+								if (resType && resType->image_info && resType->image_info->dim == SpvDimCube)
 									isCube = true;
 							}
 
@@ -232,11 +277,74 @@ namespace ed {
 								} else
 									ImGui::Image((ImTextureID)tex->user_data, ImVec2(128.0f, 128.0f * (tex->height / (float)tex->width)), ImVec2(0, 1), ImVec2(1, 0));
 							} else {
+								// color preview
+								if (resType->value_type == spvm_value_type_vector && m_data->Debugger.GetVM()->results[resType->pointer].value_type == spvm_value_type_float) {
+									if (resType->member_count == 3) {
+										float colorVal[3] = { res[0].value.f, res[1].value.f, res[2].value.f };
+										ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+										ImGui::ColorEdit3("##value_preview", colorVal, ImGuiColorEditFlags_NoInputs);
+										ImGui::PopItemFlag();
+										ImGui::SameLine();
+									} else if (resType->member_count == 4) {
+										float colorVal[4] = { res[0].value.f, res[1].value.f, res[2].value.f, res[3].value.f };
+										ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+										ImGui::ColorEdit4("##value_preview", colorVal, ImGuiColorEditFlags_NoInputs);
+										ImGui::PopItemFlag();
+										ImGui::SameLine();
+									}
+								}
+
+								// text value
 								std::stringstream ss;
-								m_data->Debugger.GetVariableValueAsString(ss, resType, res, vcount, "");
+								m_data->Debugger.GetVariableValueAsString(ss, m_data->Debugger.GetVM(), resType, res, vcount, "");
 								ImGui::Text(ss.str().c_str());
 							}
 						}
+					};
+					editor->HasExpressionHover = [&](TextEditor* ed, const std::string& id) -> bool {
+						if (!m_data->Debugger.IsDebugging() || !Settings::Instance().Debug.ShowValuesOnHover)
+							return false;
+
+						if (id == m_cacheExpression)
+							return m_cacheExists;
+
+						m_cacheExpression = id;
+
+						spvm_result_t resType = nullptr;
+						spvm_result_t exprVal = m_data->Debugger.Immediate(id, resType);
+
+						m_cacheExists = exprVal != nullptr && resType != nullptr;
+
+						if (m_cacheExists) {
+							std::stringstream ss;
+							m_data->Debugger.GetVariableValueAsString(ss, m_data->Debugger.GetVMImmediate(), resType, exprVal->members, exprVal->member_count, "");
+							
+							m_cacheValue = ss.str();
+							m_cacheHasColor = false;
+							m_cacheColor = glm::vec4(0.0f);
+
+							if (resType->value_type == spvm_value_type_vector && m_data->Debugger.GetVMImmediate()->results[resType->pointer].value_type == spvm_value_type_float) {
+								if (resType->member_count == 3)
+									m_cacheHasColor = true;
+								else if (resType->member_count == 4)
+									m_cacheHasColor = true;
+								for (int i = 0; i < resType->member_count; i++)
+									m_cacheColor[i] = exprVal->members[i].value.f;
+							}
+						}
+
+						return m_cacheExists;
+					};
+					editor->OnExpressionHover = [&](TextEditor* ed, const std::string& id) {
+						ImGui::Text(id.c_str());
+						ImGui::Separator();
+						if (m_cacheHasColor) {
+							ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+							ImGui::ColorEdit4("##value_preview", const_cast<float*>(glm::value_ptr(m_cacheColor)), ImGuiColorEditFlags_NoInputs);
+							ImGui::PopItemFlag();
+							ImGui::SameLine();
+						}
+						ImGui::Text(m_cacheValue.c_str());
 					};
 				}
 

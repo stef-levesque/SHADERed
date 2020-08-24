@@ -3,7 +3,7 @@
 #include <SHADERed/Objects/DebugInformation.h>
 #include <SHADERed/Objects/MessageStack.h>
 #include <SHADERed/Objects/PipelineManager.h>
-#include <SHADERed/Objects/PluginAPI/PluginManager.h>
+#include <SHADERed/Objects/PluginManager.h>
 #include <SHADERed/Objects/ProjectParser.h>
 
 #include <functional>
@@ -54,6 +54,9 @@ namespace ed {
 
 		inline bool IsPaused() { return m_paused; }
 		void Pause(bool pause);
+
+		// list of items waiting to be parsed
+		std::vector<PipelineItem*> SPIRVQueue;
 
 	public:
 		struct ItemVariableValue {
@@ -117,8 +120,9 @@ namespace ed {
 		void m_applyMacros(std::string& source, pipe::ComputePass* pass);
 		void m_applyMacros(std::string& source, pipe::AudioPass* pass); // TODO: merge this function with the ones above
 
-		// does a shader pass with GSUsed set also use this texture
-		bool m_isGSUsedSet(GLuint rt);
+		// compile to spirv - plugin edition
+		bool m_pluginCompileToSpirv(std::vector<GLuint>& spv, const std::string& path, const std::string& entry, plugin::ShaderStage stage, ed::ShaderMacro* macros, size_t macroCount, const std::string& actualSrc = "");
+		const char* m_pluginProcessGLSL(const char* path, const char* src);
 
 		/* picking */
 		bool m_pickAwaiting;

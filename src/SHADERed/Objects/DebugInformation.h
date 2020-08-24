@@ -4,6 +4,9 @@
 #include <SHADERed/Objects/ObjectManager.h>
 #include <SHADERed/Objects/RenderEngine.h>
 #include <SHADERed/Objects/ShaderLanguage.h>
+#ifdef BUILD_IMMEDIATE_MODE
+	#include <SHADERed/Objects/Debug/ExpressionCompiler.h>
+#endif
 
 #include <sstream>
 
@@ -16,10 +19,11 @@ extern "C" {
 namespace ed {
 	class DebugInformation {
 	public:
-		DebugInformation(ObjectManager* objs, RenderEngine* renderer);
+		DebugInformation(ObjectManager* objs, RenderEngine* renderer, MessageStack* msgs);
 		~DebugInformation();
 
 		inline spvm_state_t GetVM() { return m_vm; }
+		inline spvm_state_t GetVMImmediate() { return m_vmImmediate; }
 		inline int GetCurrentLine() { return m_shader->language == SpvSourceLanguageHLSL ? (m_vm->current_line - 1) : m_vm->current_line; }
 		inline bool IsVMRunning() { return m_vm->code_current != nullptr; }
 		inline void SetCurrentFile(const std::string& file) { m_file = file; }
@@ -28,16 +32,20 @@ namespace ed {
 
 		spvm_member_t GetVariable(const std::string& str, size_t& count, spvm_result_t& outType);
 		spvm_member_t GetVariable(const std::string& str, size_t& count);
-		void GetVariableValueAsString(std::stringstream& outString, spvm_result_t type, spvm_member_t mems, spvm_word mem_count, const std::string& prefix);
+		spvm_member_t GetVariableFromState(spvm_state_t state, const std::string& str, size_t& count, spvm_result_t& outType);
+		spvm_member_t GetVariableFromState(spvm_state_t state, const std::string& str, size_t& count);
+		void GetVariableValueAsString(std::stringstream& outString, spvm_state_t state, spvm_result_t type, spvm_member_t mems, spvm_word mem_count, const std::string& prefix);
 
 		void PrepareVertexShader(PipelineItem* pass, PipelineItem* item, PixelInformation* px = nullptr);
-		void SetVertexShaderInput(pipe::ShaderPass* pass, eng::Model::Mesh::Vertex vertex, int vertexID, int instanceID, ed::BufferObject* instanceBuffer = nullptr);
+		void SetVertexShaderInput(PipelineItem* pass, eng::Model::Mesh::Vertex vertex, int vertexID, int instanceID, ed::BufferObject* instanceBuffer = nullptr);
 		glm::vec4 ExecuteVertexShader();
 		void CopyVertexShaderOutput(PixelInformation& px, int vertexIndex);
 
 		void PreparePixelShader(PipelineItem* pass, PipelineItem* item, PixelInformation* px = nullptr);
 		void SetPixelShaderInput(PixelInformation& pixel);
 		glm::vec4 ExecutePixelShader(int x, int y, int loc = 0);
+
+		spvm_result_t Immediate(const std::string& entry, spvm_result_t& outType);
 
 		void PrepareDebugger();
 
@@ -75,10 +83,16 @@ namespace ed {
 
 		inline void SetDebugging(bool debug) { m_isDebugging = debug; }
 		inline bool IsDebugging() { return m_isDebugging; }
+		inline ShaderStage GetStage() { return m_stage; }
 
 	private:
 		ObjectManager* m_objs;
 		RenderEngine* m_renderer;
+		MessageStack* m_msgs;
+
+#ifdef BUILD_IMMEDIATE_MODE
+		ExpressionCompiler m_compiler;
+#endif
 
 		bool m_isDebugging;
 
@@ -93,13 +107,20 @@ namespace ed {
 
 		std::vector<spvm_image_t> m_images; // TODO: clear these + smart cache
 
+
+		spvm_context_t m_vmContext;
+		spvm_ext_opcode_func* m_vmGLSL;
+
 		void m_copyUniforms(PipelineItem* pass, PipelineItem* item, PixelInformation* px = nullptr);
 		void m_setupVM(std::vector<unsigned int>& spv);
 		void m_resetVM();
 		spvm_state_t m_vm;
 		spvm_program_t m_shader;
-		spvm_context_t m_vmContext;
-		spvm_ext_opcode_func* m_vmGLSL;
+		std::vector<unsigned int> m_spv;
+
+		spvm_state_t m_vmImmediate;
+		spvm_program_t m_shaderImmediate;
+		std::vector<unsigned int> m_spvImmediate;
 
 		PixelInformation* m_pixel;
 		ShaderStage m_stage;

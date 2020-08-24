@@ -7,12 +7,12 @@
 namespace ed {
 	struct PluginSystemVariableData {
 		char Name[64];
-		IPlugin* Owner;
+		IPlugin1* Owner;
 	};
 
 	struct PluginFunctionData {
 		char Name[64];
-		IPlugin* Owner;
+		IPlugin1* Owner;
 	};
 
 	// TODO: add these to TUTORIAL.md / wiki
@@ -30,6 +30,7 @@ namespace ed {
 		ViewOrthographic,  // mat4 - View*Orthographic
 		GeometryTransform, // mat4 - apply Scale, Rotation and Position to geometry
 		IsPicked,		   // bool - check if current item is selected
+		IsSavingToFile,    // bool - are we currently rendering to a preview window or to an image file?
 		CameraPosition,	   // vec4 - current camera position
 		CameraPosition3,   // vec3 - current camera position
 		CameraDirection3,  // vec3 - camera view direction
@@ -189,6 +190,38 @@ namespace ed {
 			}
 
 			return 0;
+		}
+		inline int GetRowCount()
+		{
+			switch (m_type) {
+			case ValueType::Float2x2: return 2;
+			case ValueType::Float3x3: return 3;
+			case ValueType::Float4x4: return 4;
+			}
+
+			return 1;
+		}
+		inline ValueType GetBaseType()
+		{
+			switch (m_type) {
+			case ValueType::Boolean1: return ValueType::Boolean1;
+			case ValueType::Boolean2: return ValueType::Boolean1;
+			case ValueType::Boolean3: return ValueType::Boolean1;
+			case ValueType::Boolean4: return ValueType::Boolean1;
+			case ValueType::Integer1: return ValueType::Integer1;
+			case ValueType::Integer2: return ValueType::Integer1;
+			case ValueType::Integer3: return ValueType::Integer1;
+			case ValueType::Integer4: return ValueType::Integer1;
+			case ValueType::Float1: return ValueType::Float1;
+			case ValueType::Float2: return ValueType::Float1;
+			case ValueType::Float3: return ValueType::Float1;
+			case ValueType::Float4: return ValueType::Float1;
+			case ValueType::Float2x2: return ValueType::Float1;
+			case ValueType::Float3x3: return ValueType::Float1;
+			case ValueType::Float4x4: return ValueType::Float1;
+			}
+
+			return ValueType::Float1;
 		}
 
 	private:

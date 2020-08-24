@@ -1,11 +1,14 @@
 #pragma once
 #include <SHADERed/Objects/KeyboardShortcuts.h>
-#include <SHADERed/Objects/UpdateChecker.h>
+#include <SHADERed/Objects/ShaderVariableContainer.h>
+#include <SHADERed/Objects/SPIRVParser.h>
+#include <SHADERed/Objects/WebAPI.h>
+#include <SHADERed/UI/Tools/NotificationSystem.h>
+#include <ImGuiColorTextEdit/TextEditor.h>
 #include <SHADERed/Engine/Timer.h>
 
 #include <SDL2/SDL_events.h>
 #include <SDL2/SDL_video.h>
-#include <SFML/System/Clock.hpp>
 #include <glm/glm.hpp>
 #include <map>
 #include <string>
@@ -64,6 +67,7 @@ namespace ed {
 		inline void CreateNewImage() { m_isCreateImgOpened = true; }
 		inline void CreateNewImage3D() { m_isCreateImg3DOpened = true; }
 		inline void CreateNewCameraSnapshot() { m_isRecordCameraSnapshotOpened = true; }
+		inline void CreateKeyboardTexture() { m_isCreateKBTxtOpened = true; }
 		void CreateNewComputePass();
 		void CreateNewAudioPass();
 
@@ -72,12 +76,14 @@ namespace ed {
 		inline void SetMinimalMode(bool mode) { m_minimalMode = mode; }
 		inline bool IsMinimalMode() { return m_minimalMode; }
 
+		void AddNotification(int id, const char* text, const char* btnText, std::function<void(int, IPlugin1*)> fn, IPlugin1* plugin = nullptr);
+
 		void StopDebugging();
 
 		int AreYouSure();
 
 		bool Save();
-		bool SaveAsProject(bool restoreCached = false);
+		void SaveAsProject(bool restoreCached = false, std::function<void(bool)> handle = nullptr, std::function<void()> preHandle = nullptr);
 		void Open(const std::string& file);
 
 	private:
@@ -85,9 +91,30 @@ namespace ed {
 
 		void m_imguiHandleEvent(const SDL_Event& e);
 
+		void m_autoUniforms(ShaderVariableContainer& vars, SPIRVParser& spv, std::vector<std::string>& uniformList);
+		void m_deleteUnusedUniforms(ShaderVariableContainer& vars, const std::vector<std::string>& spv);
+
 		void m_tooltip(const std::string& str);
 		void m_renderToolbar();
 		ImFont* m_iconFontLarge;
+
+		std::vector<std::string> m_recentProjects;
+
+		std::vector<ed::WebAPI::ShaderResult> m_onlineShaders;
+		std::vector<GLuint> m_onlineShaderThumbnail;
+		std::vector<ed::WebAPI::PluginResult> m_onlinePlugins;
+		std::vector<GLuint> m_onlinePluginThumbnail;
+		std::vector<ed::WebAPI::ThemeResult> m_onlineThemes;
+		std::vector<GLuint> m_onlineThemeThumbnail;
+		std::vector<std::string> m_onlineInstalledPlugins;
+		int m_onlinePage, m_onlineShaderPage, m_onlinePluginPage, m_onlineThemePage;
+		bool m_onlineIsShader, m_onlineIsPlugin;
+		char m_onlineQuery[256];
+		char m_onlineUsername[64];
+		bool m_onlineExcludeGodot;
+		void m_onlineSearchShaders();
+		void m_onlineSearchPlugins();
+		void m_onlineSearchThemes();
 
 		int m_width, m_height;
 
@@ -111,10 +138,7 @@ namespace ed {
 			m_isCreateCubemapOpened, m_isNewProjectPopupOpened,
 			m_isAboutOpen, m_isCreateBufferOpened, m_isCreateImgOpened,
 			m_isInfoOpened, m_isCreateImg3DOpened, m_isRecordCameraSnapshotOpened,
-			m_isIncompatPluginsOpened;
-
-		bool m_isUpdateNotificationOpened;
-		sf::Clock m_updateNotifyClock;
+			m_isIncompatPluginsOpened, m_isCreateKBTxtOpened, m_isBrowseOnlineOpened;
 
 		Settings* m_settingsBkp;
 		std::map<std::string, KeyboardShortcuts::Shortcut> m_shortcutsBkp;
@@ -133,6 +157,12 @@ namespace ed {
 		bool m_isChangelogOpened;
 		std::string m_changelogText;
 		void m_checkChangelog();
+
+		std::string m_saveAsOldFile;
+		bool m_saveAsReset;
+		bool m_saveAsRestoreCache;
+		std::function<void(bool)> m_saveAsHandle;
+		std::function<void()> m_saveAsPreHandle;
 
 		bool m_expcppError;
 		int m_expcppBackend;
@@ -161,16 +191,22 @@ namespace ed {
 		int m_savePreviewSeqFPS;
 
 		bool m_performanceMode, m_perfModeFake;
-		sf::Clock m_perfModeClock;
+		eng::Timer m_perfModeClock;
+
+		std::string m_uiIniFile;
+
+		std::string* m_cubemapPathPtr;
 
 		std::string m_selectedTemplate;
 		std::vector<std::string> m_templates;
 		void m_loadTemplateList();
 
+		NotificationSystem m_notifs;
+
 		std::vector<UIView*> m_views, m_debugViews;
 		CreateItemUI* m_createUI;
 
-		UpdateChecker m_updateCheck;
+		TextEditor m_kbInfo;
 
 		InterfaceManager* m_data;
 		SDL_Window* m_wnd;

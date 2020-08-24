@@ -46,13 +46,17 @@ namespace ed {
 		};
 
 	private:
-		sf::Clock m_bufUpdateClock;
+		eng::Timer m_bufUpdateClock;
 		bool m_drawBufferElement(int row, int col, void* data, ShaderVariable::ValueType type);
 		std::vector<mItem> m_items;
 		ed::AudioAnalyzer m_audioAnalyzer;
 		float m_samples[512], m_fft[512];
 
+		std::string m_saveObject;
+
 		bool m_initRowSize;
+
+		int m_dialogActionType; // 0 -> from texture (byte), 1 -> from texture (float), 2 -> from model, 3 -> raw data
 
 		// tools
 		CubemapPreview m_cubePrev;

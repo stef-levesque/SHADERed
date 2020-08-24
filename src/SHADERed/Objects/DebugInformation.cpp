@@ -10,8 +10,10 @@
 #define GET_VALUE_WITH_CHECK_INT(val, c) (val == nullptr ? 0 : val->members[c].value.s)
 #define GET_VALUE2_WITH_CHECK_INT(val, c, r) (val == nullptr ? 0 : val->members[c].members[r].value.s)
 
+
+
 namespace ed {
-	DebugInformation::DebugInformation(ObjectManager* objs, RenderEngine* renderer)
+	DebugInformation::DebugInformation(ObjectManager* objs, RenderEngine* renderer, MessageStack* msgs)
 	{
 		m_objs = objs;
 		m_renderer = renderer;
@@ -19,6 +21,9 @@ namespace ed {
 		m_vm = nullptr;
 		m_shader = nullptr;
 		m_pixel = nullptr;
+		m_vmImmediate = nullptr;
+		m_shaderImmediate = nullptr;
+		m_msgs = msgs;
 
 		m_vmContext = spvm_context_initialize();
 		m_vmGLSL = spvm_build_glsl450_ext();
@@ -50,17 +55,67 @@ namespace ed {
 	}
 	void DebugInformation::m_setupVM(std::vector<unsigned int>& spv)
 	{
+		m_spv = spv;
+		
 		// create program & state
-		m_shader = spvm_program_create(m_vmContext, (spvm_source)spv.data(), spv.size());
-		m_vm = spvm_state_create(m_shader);
+		m_shader = spvm_program_create(m_vmContext, (spvm_source)m_spv.data(), m_spv.size());
+		m_vm = _spvm_state_create_base(m_shader, m_stage == ShaderStage::Pixel, 0);
 
 		// link GLSL.std.450
 		spvm_state_set_extension(m_vm, "GLSL.std.450", m_vmGLSL);
 	}
 	void DebugInformation::m_copyUniforms(PipelineItem* owner, PipelineItem* item, PixelInformation* px)
 	{
-		pipe::ShaderPass* pass = (pipe::ShaderPass*)owner->Data;
-		const std::vector<ed::ShaderVariable*>& vars = pass->Variables.GetVariables();
+		bool pluginUsesCustomTextures = false;
+		bool requiresVarCleanup = false;
+		std::vector<ed::ShaderVariable*> vars;
+		if (owner->Type == PipelineItem::ItemType::ShaderPass) {
+			pipe::ShaderPass* pass = (pipe::ShaderPass*)owner->Data;
+			vars = pass->Variables.GetVariables();
+		} else if (owner->Type == PipelineItem::ItemType::PluginItem) {
+			pipe::PluginItemData* plData = (pipe::PluginItemData*)owner->Data;
+
+			pluginUsesCustomTextures = plData->Owner->PipelineItem_DebugUsesCustomTextures(plData->Type, plData->PluginData);
+
+			plData->Owner->PipelineItem_DebugPrepareVariables(plData->Type, plData->PluginData, item->Name);
+			
+			int varCount = plData->Owner->PipelineItem_GetVariableCount(plData->Type, plData->PluginData);
+			vars.resize(varCount);
+
+			for (int i = 0; i < varCount; i++) {
+				const char* varName = plData->Owner->PipelineItem_GetVariableName(plData->Type, plData->PluginData, i);
+				ShaderVariable::ValueType type = (ShaderVariable::ValueType)plData->Owner->PipelineItem_GetVariableType(plData->Type, plData->PluginData, i);
+
+				ed::ShaderVariable* var = new ed::ShaderVariable(type, varName);
+				vars[i] = var;
+				int cm = var->GetColumnCount();
+				int rm = var->GetRowCount();
+
+				ShaderVariable::ValueType baseType = var->GetBaseType();
+
+				for (int c = 0; c < cm; c++) {
+					for (int r = 0; r < rm; r++) {
+						switch (baseType) {
+						case ShaderVariable::ValueType::Float1: {
+							float valFloat = plData->Owner->PipelineItem_GetVariableValueFloat(plData->Type, plData->PluginData, i, c, r);
+							var->SetFloat(valFloat, c, r);
+						} break;
+						case ShaderVariable::ValueType::Integer1: {
+							int valInteger = plData->Owner->PipelineItem_GetVariableValueInteger(plData->Type, plData->PluginData, i, c);
+							var->SetIntegerValue(valInteger, c);
+						} break;
+						case ShaderVariable::ValueType::Boolean1: {
+							bool valBoolean = plData->Owner->PipelineItem_GetVariableValueBoolean(plData->Type, plData->PluginData, i, c);
+							var->SetBooleanValue(valBoolean, c);
+						} break;
+						}
+					}
+				}
+			}
+
+			requiresVarCleanup = true;
+		}
+
 		const auto& itemVars = m_renderer->GetItemVariableValues();
 		const std::vector<GLuint>& srvs = m_objs->GetBindList(owner);
 		const std::vector<GLuint>& ubos = m_objs->GetUniformBindList(owner);
@@ -91,6 +146,14 @@ namespace ed {
 
 			SystemVariableManager::Instance().SetPicked(m_renderer->IsPicked(item));
 			SystemVariableManager::Instance().SetGeometryTransform(item, vbData->Scale, vbData->Rotation, vbData->Position);
+		} else if (item->Type == PipelineItem::ItemType::PluginItem) {
+			pipe::PluginItemData* plData = reinterpret_cast<pipe::PluginItemData*>(item->Data);
+			
+			float scale[3], pos[3], rota[3];
+			plData->Owner->PipelineItem_GetTransform(plData->Type, plData->PluginData, pos, scale, rota);
+
+			SystemVariableManager::Instance().SetPicked(m_renderer->IsPicked(item));
+			SystemVariableManager::Instance().SetGeometryTransform(item, glm::make_vec3(scale), glm::make_vec3(rota), glm::make_vec3(pos));
 		}
 
 		// copy variable values
@@ -324,7 +387,7 @@ namespace ed {
 							}
 						}
 
-						if (sampler2Dloc >= srvs.size()) {
+						if (sampler2Dloc >= srvs.size() && !pluginUsesCustomTextures) {
 							spvm_image_t img = (spvm_image_t)malloc(sizeof(spvm_image));
 
 							// get texture size
@@ -341,91 +404,145 @@ namespace ed {
 							m_images.push_back(img);
 
 							sampler2Dloc++;
-						} else {
+						} 
+						else {
 							spvm_image_t img = (spvm_image_t)malloc(sizeof(spvm_image));
 							
 							if (type_info->image_info == NULL)
 								type_info = &m_vm->results[type_info->pointer];
 							
-							// cubemaps
-							if (type_info->image_info->dim == SpvDimCube) {
-								std::string itemName = m_objs->GetItemNameByTextureID(srvs[sampler2Dloc]);
-								ObjectManagerItem* itemData = m_objs->GetObjectManagerItem(itemName);
+							glm::ivec3 imgSize(1, 1, 1);
+							float* imgData = nullptr;
+							GLuint pluginCustomTexture = 0;
+							if (pluginUsesCustomTextures) {
+								// cubemaps
+								if (type_info->image_info->dim == SpvDimCube) {
+									pipe::PluginItemData* plData = (pipe::PluginItemData*)owner->Data;
 
-								// get texture size
-								glm::ivec2 size(1, 1);
-								if (itemData != nullptr) {
-									if (itemData->RT != nullptr)
-										size = m_objs->GetRenderTextureSize(itemName);
-									else if (itemData->Image != nullptr)
-										size = itemData->Image->Size;
-									else if (itemData->Sound != nullptr)
-										size = glm::ivec2(512, 2);
-									else
-										size = itemData->ImageSize;
+									pluginCustomTexture = plData->Owner->PipelineItem_DebugGetTexture(plData->Type, plData->PluginData, sampler2Dloc, slot->name);
+									plData->Owner->PipelineItem_DebugGetTextureSize(plData->Type, plData->PluginData, sampler2Dloc, slot->name, imgSize.x, imgSize.y, imgSize.z);
+									imgSize.z = 6;
+
+									imgData = (float*)malloc(sizeof(float) * imgSize.x * imgSize.y * 6 * 4); // 6 faces
+
+									// get the data from the GPU
+									glBindTexture(GL_TEXTURE_CUBE_MAP, pluginCustomTexture);
+									for (int i = 0; i < 6; i++)
+										glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA, GL_FLOAT, imgData + imgSize.x * imgSize.y * 4 * i);
+									glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 								}
+								// 3d textures
+								else if (type_info->image_info->dim == SpvDim3D) {
+									pipe::PluginItemData* plData = (pipe::PluginItemData*)owner->Data;
 
-								float* imgData = (float*)malloc(sizeof(float) * size.x * size.y * 6 * 4); // 6 faces
+									pluginCustomTexture = plData->Owner->PipelineItem_DebugGetTexture(plData->Type, plData->PluginData, sampler2Dloc, slot->name);
+									plData->Owner->PipelineItem_DebugGetTextureSize(plData->Type, plData->PluginData, sampler2Dloc, slot->name, imgSize.x, imgSize.y, imgSize.z);
+									
+									imgData = (float*)malloc(sizeof(float) * imgSize.x * imgSize.y * imgSize.z * 4);
 
-								// get the data from the GPU
-								glBindTexture(GL_TEXTURE_CUBE_MAP, srvs[sampler2Dloc]);
-								for (int i = 0; i < 6; i++)
-									glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA, GL_FLOAT, imgData + size.x * size.y * 4 * i);
-								glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+									// get the data from the GPU
+									glBindTexture(GL_TEXTURE_3D, pluginCustomTexture);
+									glGetTexImage(GL_TEXTURE_3D, 0, GL_RGBA, GL_FLOAT, imgData);
+									glBindTexture(GL_TEXTURE_3D, 0);
+								}
+								// 2d textures
+								else {
+									pipe::PluginItemData* plData = (pipe::PluginItemData*)owner->Data;
 
-								// set and cache
-								spvm_image_create(img, imgData, size.x, size.y, 6);
+									pluginCustomTexture = plData->Owner->PipelineItem_DebugGetTexture(plData->Type, plData->PluginData, sampler2Dloc, slot->name);
+									plData->Owner->PipelineItem_DebugGetTextureSize(plData->Type, plData->PluginData, sampler2Dloc, slot->name, imgSize.x, imgSize.y, imgSize.z);
+									imgSize.z = 1;
+
+									imgData = (float*)malloc(sizeof(float) * imgSize.x * imgSize.y * 4);
+
+									// get the data from the GPU
+									glBindTexture(GL_TEXTURE_2D, pluginCustomTexture);
+									glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, imgData);
+									glBindTexture(GL_TEXTURE_2D, 0);
+								}
+							} else {
+								// cubemaps
+								if (type_info->image_info->dim == SpvDimCube) {
+									std::string itemName = m_objs->GetItemNameByTextureID(srvs[sampler2Dloc]);
+									ObjectManagerItem* itemData = m_objs->GetObjectManagerItem(itemName);
+
+									// get texture size
+									glm::ivec2 size(1, 1);
+									if (itemData != nullptr) {
+										if (itemData->RT != nullptr)
+											size = m_objs->GetRenderTextureSize(itemName);
+										else if (itemData->Image != nullptr)
+											size = itemData->Image->Size;
+										else if (itemData->Sound != nullptr)
+											size = glm::ivec2(512, 2);
+										else
+											size = itemData->ImageSize;
+									}
+									imgSize.x = size.x;
+									imgSize.y = size.y;
+									imgSize.z = 6;
+
+									imgData = (float*)malloc(sizeof(float) * size.x * size.y * 6 * 4); // 6 faces
+
+									// get the data from the GPU
+									glBindTexture(GL_TEXTURE_CUBE_MAP, srvs[sampler2Dloc]);
+									for (int i = 0; i < 6; i++)
+										glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA, GL_FLOAT, imgData + size.x * size.y * 4 * i);
+									glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+								}
+								// 3d textures
+								else if (type_info->image_info->dim == SpvDim3D) {
+									// get texture size
+									std::string itemName = m_objs->GetItemNameByTextureID(srvs[sampler2Dloc]);
+									ObjectManagerItem* itemData = m_objs->GetObjectManagerItem(itemName);
+									
+									if (itemData != nullptr && itemData->Image3D != nullptr)
+										imgSize = itemData->Image3D->Size;
+
+									imgData = (float*)malloc(sizeof(float) * imgSize.x * imgSize.y * imgSize.z * 4);
+
+									// get the data from the GPU
+									glBindTexture(GL_TEXTURE_3D, srvs[sampler2Dloc]);
+									glGetTexImage(GL_TEXTURE_3D, 0, GL_RGBA, GL_FLOAT, imgData);
+									glBindTexture(GL_TEXTURE_3D, 0);
+								}
+								// 2d textures
+								else {
+									// get texture size
+									std::string itemName = m_objs->GetItemNameByTextureID(srvs[sampler2Dloc]);
+									ObjectManagerItem* itemData = m_objs->GetObjectManagerItem(itemName);
+									glm::ivec2 size(1, 1);
+									if (itemData != nullptr) {
+										if (itemData->RT != nullptr)
+											size = m_objs->GetRenderTextureSize(itemName);
+										else if (itemData->Image != nullptr)
+											size = itemData->Image->Size;
+										else if (itemData->Sound != nullptr)
+											size = glm::ivec2(512, 2);
+										else
+											size = itemData->ImageSize;
+									}
+									imgSize.x = size.x;
+									imgSize.y = size.y;
+
+									imgData = (float*)malloc(sizeof(float) * size.x * size.y * 4);
+
+									// get the data from the GPU
+									glBindTexture(GL_TEXTURE_2D, srvs[sampler2Dloc]);
+									glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, imgData);
+									glBindTexture(GL_TEXTURE_2D, 0);
+								}
+							}
+
+							if (imgData != nullptr) {
+								spvm_image_create(img, imgData, imgSize.x, imgSize.y, imgSize.z);
 								free(imgData);
 							}
-							// 3d textures
-							else if (type_info->image_info->dim == SpvDim3D) {
-								// get texture size
-								std::string itemName = m_objs->GetItemNameByTextureID(srvs[sampler2Dloc]);
-								ObjectManagerItem* itemData = m_objs->GetObjectManagerItem(itemName);
-								glm::ivec3 size(1, 1, 1);
-								if (itemData != nullptr && itemData->Image3D != nullptr) {
-									size = itemData->Image3D->Size;
-								}
 
-								float* imgData = (float*)malloc(sizeof(float) * size.x * size.y * size.z * 4);
-
-								// get the data from the GPU
-								glBindTexture(GL_TEXTURE_3D, srvs[sampler2Dloc]);
-								glGetTexImage(GL_TEXTURE_3D, 0, GL_RGBA, GL_FLOAT, imgData);
-								glBindTexture(GL_TEXTURE_3D, 0);
-
-								spvm_image_create(img, imgData, size.x, size.y, size.z);
-								free(imgData);
-							}
-							// 2d textures
-							else {
-								// get texture size
-								std::string itemName = m_objs->GetItemNameByTextureID(srvs[sampler2Dloc]);
-								ObjectManagerItem* itemData = m_objs->GetObjectManagerItem(itemName);
-								glm::ivec2 size(1, 1);
-								if (itemData != nullptr) {
-									if (itemData->RT != nullptr)
-										size = m_objs->GetRenderTextureSize(itemName);
-									else if (itemData->Image != nullptr)
-										size = itemData->Image->Size;
-									else if (itemData->Sound != nullptr)
-										size = glm::ivec2(512, 2);
-									else
-										size = itemData->ImageSize;
-								}
-
-								float* imgData = (float*)malloc(sizeof(float) * size.x * size.y * 4);
-
-								// get the data from the GPU
-								glBindTexture(GL_TEXTURE_2D, srvs[sampler2Dloc]);
-								glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, imgData);
-								glBindTexture(GL_TEXTURE_2D, 0);
-
-								spvm_image_create(img, imgData, size.x, size.y, 1);
-								free(imgData);
-							}
-
-							img->user_data = (void*)srvs[sampler2Dloc];
+							if (pluginUsesCustomTextures)
+								img->user_data = (void*)pluginCustomTexture;
+							else
+								img->user_data = (void*)srvs[sampler2Dloc];
 
 							slot->members[0].image_data = img;
 							m_images.push_back(img);
@@ -493,30 +610,44 @@ namespace ed {
 				}
 			}
 		}
+
+		if (requiresVarCleanup) {
+			for (int i = 0; i < vars.size(); i++)
+				delete vars[i];
+			vars.clear();
+		}
 	}
 	
 	spvm_member_t DebugInformation::GetVariable(const std::string& vname, size_t& outCount, spvm_result_t& outType)
 	{
+		return GetVariableFromState(m_vm, vname, outCount, outType);
+	}
+	spvm_member_t DebugInformation::GetVariable(const std::string& str, size_t& count)
+	{
+		return GetVariableFromState(m_vm, str, count);
+	}
+	spvm_member_t DebugInformation::GetVariableFromState(spvm_state_t state, const std::string& vname, size_t& outCount, spvm_result_t& outType)
+	{
 		spvm_word mem_index = 0, mem_count = 0;
-		spvm_result_t val = spvm_state_get_local_result(m_vm, m_vm->current_function, (spvm_string)vname.c_str());
+		spvm_result_t val = spvm_state_get_local_result(state, state->current_function, (spvm_string)vname.c_str());
 		if (val == nullptr)
-			val = spvm_state_get_result_with_value(m_vm, (spvm_string)vname.c_str());
+			val = spvm_state_get_result_with_value(state, (spvm_string)vname.c_str());
 
 		if (val == nullptr) { // anon buffer object uniforms
-			val = spvm_state_get_result(m_vm, "");
+			val = spvm_state_get_result(state, "");
 
 			bool foundBufferVariable = false;
 			for (spvm_word i = 0; i < m_shader->bound; i++) {
-				if (m_vm->results[i].name) {
-					if (strcmp(m_vm->results[i].name, "") == 0 && m_vm->results[i].type == spvm_result_type_variable) {
-						val = &m_vm->results[i];
-						spvm_result_t buffer_info = spvm_state_get_type_info(m_vm->results, &m_vm->results[val->pointer]);
+				if (state->results[i].name) {
+					if (strcmp(state->results[i].name, "") == 0 && state->results[i].type == spvm_result_type_variable) {
+						val = &state->results[i];
+						spvm_result_t buffer_info = spvm_state_get_type_info(state->results, &state->results[val->pointer]);
 						for (spvm_word i = 0; i < buffer_info->member_name_count; i++) {
 							if (strcmp(vname.c_str(), buffer_info->member_name[i]) == 0) {
 								mem_index = i;
 								mem_count = 1;
 
-								outType = spvm_state_get_type_info(m_vm->results, &m_vm->results[val->members[mem_index].type]);
+								outType = spvm_state_get_type_info(state->results, &state->results[val->members[mem_index].type]);
 
 								foundBufferVariable = true;
 								break;
@@ -533,25 +664,25 @@ namespace ed {
 		}
 
 		if (val && val->members != nullptr && mem_count != 0) {
-			if (mem_count == 1 && val->members[mem_index].member_count != 0) {
-				outType = spvm_state_get_type_info(m_vm->results, &m_vm->results[val->members[mem_index].type]);
+			/*if (mem_count == 1 && val->members[mem_index].member_count != 0) {
+				outType = spvm_state_get_type_info(state->results, &state->results[val->members[mem_index].type]);
 				outCount = val->members[mem_index].member_count;
 				return &val->members[mem_index].members[0];
-			}
+			}*/
 
-			outType = spvm_state_get_type_info(m_vm->results, &m_vm->results[val->pointer]);
+			outType = spvm_state_get_type_info(state->results, &state->results[val->pointer]);
 			outCount = mem_count;
 			return &val->members[mem_index];
 		}
 
 		return nullptr;
 	}
-	spvm_member_t DebugInformation::GetVariable(const std::string& str, size_t& count)
+	spvm_member_t DebugInformation::GetVariableFromState(spvm_state_t state, const std::string& str, size_t& count)
 	{
 		spvm_result_t type;
-		return GetVariable(str, count, type);
+		return GetVariableFromState(state, str, count, type);
 	}
-	void DebugInformation::GetVariableValueAsString(std::stringstream& outString, spvm_result_t type, spvm_member_t mems, spvm_word mem_count, const std::string& prefix)
+	void DebugInformation::GetVariableValueAsString(std::stringstream& outString, spvm_state_t state, spvm_result_t type, spvm_member_t mems, spvm_word mem_count, const std::string& prefix)
 	{
 		/*
 			TODO: use BFS - might have more control over output + faster
@@ -566,9 +697,9 @@ namespace ed {
 
 			spvm_result_t vtype = type;
 			if (mems[i].type != 0)
-				vtype = spvm_state_get_type_info(m_vm->results, &m_vm->results[mems[i].type]);
+				vtype = spvm_state_get_type_info(state->results, &state->results[mems[i].type]);
 			if (vtype->member_count > 1 && vtype->pointer != 0 && vtype->value_type != spvm_value_type_matrix && vtype->value_type != spvm_value_type_array)
-				vtype = spvm_state_get_type_info(m_vm->results, &m_vm->results[vtype->pointer]);
+				vtype = spvm_state_get_type_info(state->results, &state->results[vtype->pointer]);
 
 			if (mems[i].member_count == 0) {
 				if (!outPrefix && !prefix.empty()) {
@@ -596,23 +727,190 @@ namespace ed {
 				if (type->value_type == spvm_value_type_runtime_array && mem_count > 6 && i == mem_count - 3)
 					outString << "...\n";
 
-				GetVariableValueAsString(outString, vtype, mems[i].members, mems[i].member_count, newPrefix);
+				GetVariableValueAsString(outString, state, vtype, mems[i].members, mems[i].member_count, newPrefix);
 			}
 		}
 		if (!allRec) outString << "\n";
 	}
 
+	spvm_result_t DebugInformation::Immediate(const std::string& entry, spvm_result_t& outType)
+	{
+		if (m_vm == nullptr)
+			return nullptr;
+
+		bool usePlugin = false;
+		ed::IPlugin2* plugin2 = nullptr;
+		if (m_pixel->Pass->Type == PipelineItem::ItemType::PluginItem) {
+			pipe::PluginItemData* plData = (pipe::PluginItemData*)m_pixel->Pass->Data;
+			if (plData->Owner->GetVersion() >= 2) {
+				plugin2 = ((ed::IPlugin2*)plData->Owner);
+				
+				if (!plugin2->PipelineItem_SupportsImmediateMode(plData->Type, plData->PluginData, (ed::plugin::ShaderStage)m_stage))
+					return nullptr;
+
+				if (plugin2->PipelineItem_HasCustomImmediateModeCompiler(plData->Type, plData->PluginData, (ed::plugin::ShaderStage)m_stage)) {
+					if (!plugin2->PipelineItem_ImmediateModeCompile(plData->Type, plData->PluginData, (ed::plugin::ShaderStage)m_stage, entry.c_str()))
+						return nullptr;
+					else
+						usePlugin = true;
+				}
+			}
+		}
+
+#ifdef BUILD_IMMEDIATE_MODE // TODO
+		int resultID = 0;
+
+		std::vector<std::string> varList;
+		if (!usePlugin) {
+			std::string curFunction = "";
+			if (m_vm != nullptr && m_vm->current_function != nullptr)
+				curFunction = m_vm->current_function->name;
+
+			// compile the expression
+			resultID = m_compiler.Compile(entry, curFunction);
+			m_compiler.GetSPIRV(m_spvImmediate);
+
+			varList = m_compiler.GetVariableList();
+		} else if (plugin2) {
+			unsigned int spvSize = plugin2->ImmediateMode_GetSPIRVSize();
+			std::vector<unsigned int> spv;
+			if (spvSize != 0) {
+				unsigned int* spvPtr = plugin2->ImmediateMode_GetSPIRV();
+				m_spvImmediate = std::vector<unsigned int>(spvPtr, spvPtr + spvSize);
+			}
+			resultID = plugin2->ImmediateMode_GetResultID();
+
+			for (unsigned int i = 0u; i < plugin2->ImmediateMode_GetVariableCount(); i++)
+				varList.push_back(plugin2->ImmediateMode_GetVariableName(i));
+		}
+
+		// error occured
+		if (resultID <= 0)
+			return nullptr;
+
+		// delete old program & state
+		if (m_vmImmediate) {
+			spvm_state_delete(m_vmImmediate);
+			m_vmImmediate = nullptr;
+		}
+		if (m_shaderImmediate) {
+			spvm_program_delete(m_shaderImmediate);
+			m_shaderImmediate = nullptr;
+		}
+
+		// create program & state
+		m_shaderImmediate = spvm_program_create(m_vmContext, (spvm_source)m_spvImmediate.data(), m_spvImmediate.size());
+		m_vmImmediate = _spvm_state_create_base(m_shaderImmediate, m_stage == ShaderStage::Pixel, 0);
+		
+		// can't use set_extenstion() function because for some reason two GLSL.std.450 instructions are generated with spvgentwo
+		for (int i = 0; i < m_shaderImmediate->bound; i++)
+			if (m_vmImmediate->results[i].name)
+				if (strcmp(m_vmImmediate->results[i].name, "GLSL.std.450") == 0)
+					m_vmImmediate->results[i].extension = m_vmGLSL;
+
+		// copy variable values
+		spvm_state_group_sync(m_vm);
+		for (int i = 0; i < varList.size(); i++) {
+			size_t varValueCount = 0;
+			spvm_result_t varType = nullptr;
+			spvm_member_t varValue = GetVariable(varList[i], varValueCount, varType);
+
+			if (varValue == nullptr)
+				continue;
+
+			spvm_result_t pointerToVariable[4] = { nullptr };
+
+			for (int j = 0; j < m_shaderImmediate->bound; j++) {
+				if (m_vmImmediate->results[j].name == nullptr)
+					continue;
+				
+				spvm_result_t res = &m_vmImmediate->results[j];
+				spvm_result_t resType = spvm_state_get_type_info(m_vmImmediate->results, &m_vmImmediate->results[res->pointer]);
+
+				// TODO: also check for the type, or there might be some crashes caused by two vars with different type (?) (mat4 and vec4 for example)
+				
+				if (res->member_count == varValueCount && resType->value_type == varType->value_type && res->members != nullptr && strcmp(varList[i].c_str(), res->name) == 0) {
+					spvm_member_memcpy(res->members, varValue, varValueCount);
+
+					pointerToVariable[0] = res;
+
+					if (m_vmImmediate->derivative_used) {
+						if (m_vmImmediate->derivative_group_x) {
+							spvm_member_memcpy(m_vmImmediate->derivative_group_x->results[j].members, GetVariableFromState(m_vm->derivative_group_x, varList[i], varValueCount), varValueCount);
+							pointerToVariable[1] = &m_vmImmediate->derivative_group_x->results[j];
+						}
+						if (m_vmImmediate->derivative_group_y) {
+							spvm_member_memcpy(m_vmImmediate->derivative_group_y->results[j].members, GetVariableFromState(m_vm->derivative_group_y, varList[i], varValueCount), varValueCount);
+							pointerToVariable[2] = &m_vmImmediate->derivative_group_y->results[j];
+						}
+						if (m_vmImmediate->derivative_group_d) {
+							spvm_member_memcpy(m_vmImmediate->derivative_group_d->results[j].members, GetVariableFromState(m_vm->derivative_group_d, varList[i], varValueCount), varValueCount);
+							pointerToVariable[3] = &m_vmImmediate->derivative_group_d->results[j];
+						}
+					}
+				}
+			}
+			
+			// function parameters (which are pointers)
+			if (pointerToVariable[0] != nullptr) {
+				for (int j = 0; j < m_shaderImmediate->bound; j++) {
+					if (m_vmImmediate->results[j].name == nullptr)
+						continue;
+
+					spvm_result_t res = &m_vmImmediate->results[j];
+
+					// TODO: also check for the type, or there might be some crashes caused by two vars with different type (?) (mat4 and vec4 for example)
+
+					if (res->member_count == varValueCount && res->members == nullptr && strcmp(varList[i].c_str(), res->name) == 0) {
+						res->members = pointerToVariable[0]->members;
+
+						if (m_vmImmediate->derivative_used) {
+							if (m_vmImmediate->derivative_group_x) m_vmImmediate->derivative_group_x->results[j].members = pointerToVariable[1]->members;
+							if (m_vmImmediate->derivative_group_y) m_vmImmediate->derivative_group_y->results[j].members = pointerToVariable[2]->members;
+							if (m_vmImmediate->derivative_group_d) m_vmImmediate->derivative_group_d->results[j].members = pointerToVariable[3]->members;
+						}
+					}
+				}
+			}
+		}
+
+		// execute $$_shadered_immediate
+		spvm_word fnImmediate = spvm_state_get_result_location(m_vmImmediate, "$$_shadered_immediate");
+		spvm_state_prepare(m_vmImmediate, fnImmediate);
+		spvm_state_call_function(m_vmImmediate);
+
+		// get type and return value
+		spvm_result_t val = &m_vmImmediate->results[resultID];
+		outType = spvm_state_get_type_info(m_vmImmediate->results, &m_vmImmediate->results[val->pointer]);
+		return val;
+#else
+		return nullptr; // TODO: enable DebugInformation::Immediate() for macOS devices
+#endif
+	}
+
 	void DebugInformation::PrepareVertexShader(PipelineItem* owner, PipelineItem* item, PixelInformation* px)
 	{
+		m_stage = ShaderStage::Vertex;
+
 		m_resetVM();
-		m_setupVM(((pipe::ShaderPass*)owner->Data)->VSSPV);
+		if (owner->Type == PipelineItem::ItemType::ShaderPass)
+			m_setupVM(((pipe::ShaderPass*)owner->Data)->VSSPV);
+		else if (owner->Type == PipelineItem::ItemType::PluginItem) {
+			pipe::PluginItemData* plData = (pipe::PluginItemData*)owner->Data;
+			
+			unsigned int spvSize = plData->Owner->PipelineItem_GetSPIRVSize(plData->Type, plData->PluginData, plugin::ShaderStage::Vertex);
+			std::vector<unsigned int> spv;
+			if (spvSize != 0) {
+				unsigned int* spvPtr = plData->Owner->PipelineItem_GetSPIRV(plData->Type, plData->PluginData, plugin::ShaderStage::Vertex);
+				spv = std::vector<unsigned int>(spvPtr, spvPtr + spvSize);
+			}
+			m_setupVM(spv);
+ 		}
 
 		// uniforms
 		m_copyUniforms(owner, item, px);
-		
-		m_stage = ShaderStage::Vertex;
 	}
-	void DebugInformation::SetVertexShaderInput(pipe::ShaderPass* pass, eng::Model::Mesh::Vertex vertex, int vertexID, int instanceID, ed::BufferObject* instanceBuffer)
+	void DebugInformation::SetVertexShaderInput(PipelineItem* pass, eng::Model::Mesh::Vertex vertex, int vertexID, int instanceID, ed::BufferObject* instanceBuffer)
 	{
 		// input variables
 		for (spvm_word i = 0; i < m_shader->bound; i++) {
@@ -642,43 +940,54 @@ namespace ed {
 
 					InputLayoutValue inputType = InputLayoutValue::MaxCount;
 
-					if (location < pass->InputLayout.size())
-						inputType = pass->InputLayout[location].Value;
-					else if (instanceBuffer != nullptr) {
-						int bufferLocation = location - pass->InputLayout.size();
+					if (pass->Type == PipelineItem::ItemType::ShaderPass) {
+						pipe::ShaderPass* passData = (pipe::ShaderPass*)pass->Data;
+						if (location < passData->InputLayout.size())
+							inputType = passData->InputLayout[location].Value;
+						else if (instanceBuffer != nullptr) {
+							int bufferLocation = location - passData->InputLayout.size();
 
-						std::vector<ShaderVariable::ValueType> tData = m_objs->ParseBufferFormat(instanceBuffer->ViewFormat);
+							std::vector<ShaderVariable::ValueType> tData = m_objs->ParseBufferFormat(instanceBuffer->ViewFormat);
 
-						int stride = 0;
-						for (const auto& dataEl : tData)
-							stride += ShaderVariable::GetSize(dataEl, true);
+							int stride = 0;
+							for (const auto& dataEl : tData)
+								stride += ShaderVariable::GetSize(dataEl, true);
 
-						GLfloat* bufPtr = (GLfloat*)malloc(stride);
+							GLfloat* bufPtr = (GLfloat*)malloc(stride);
 
-						glBindBuffer(GL_ARRAY_BUFFER, instanceBuffer->ID);
-						glGetBufferSubData(GL_ARRAY_BUFFER, instanceID * stride, stride, &bufPtr[0]);
-						glBindBuffer(GL_ARRAY_BUFFER, 0);
+							glBindBuffer(GL_ARRAY_BUFFER, instanceBuffer->ID);
+							glGetBufferSubData(GL_ARRAY_BUFFER, instanceID * stride, stride, &bufPtr[0]);
+							glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-						int iOffset = 0;
-						for (int j = 0; j < tData.size(); j++) {
-							int elCount = ShaderVariable::GetSize(tData[j]) / 4;
+							int iOffset = 0;
+							for (int j = 0; j < tData.size(); j++) {
+								int elCount = ShaderVariable::GetSize(tData[j]) / 4;
 
-							if (j == bufferLocation) {
-								if (elCount == 4)
-									value = glm::make_vec4(bufPtr + iOffset);
-								else if (elCount == 3)
-									value = glm::vec4(glm::make_vec3(bufPtr + iOffset), 0.0f);
-								else if (elCount == 2)
-									value = glm::vec4(glm::make_vec2(bufPtr + iOffset), 0.0f, 0.0f);
-								else
-									value = glm::vec4(*(bufPtr + iOffset), 0.0f, 0.0f, 0.0f);
-								break;
+								if (j == bufferLocation) {
+									if (elCount == 4)
+										value = glm::make_vec4(bufPtr + iOffset);
+									else if (elCount == 3)
+										value = glm::vec4(glm::make_vec3(bufPtr + iOffset), 0.0f);
+									else if (elCount == 2)
+										value = glm::vec4(glm::make_vec2(bufPtr + iOffset), 0.0f, 0.0f);
+									else
+										value = glm::vec4(*(bufPtr + iOffset), 0.0f, 0.0f, 0.0f);
+									break;
+								}
+
+								iOffset += elCount;
 							}
 
-							iOffset += elCount;
+							free(bufPtr);
 						}
+					} else if (pass->Type == PipelineItem::ItemType::PluginItem) {
+						pipe::PluginItemData* plData = (pipe::PluginItemData*)pass->Data;
+						if (location < plData->Owner->PipelineItem_GetInputLayoutSize(plData->Type, plData->PluginData)) {
+							plugin::InputLayoutItem inputItem;
+							plData->Owner->PipelineItem_GetInputLayoutItem(plData->Type, plData->PluginData, location, inputItem);
 
-						free(bufPtr);
+							inputType = (InputLayoutValue)inputItem.Value;
+						}
 					}
 
 					switch (inputType) {
@@ -708,8 +1017,8 @@ namespace ed {
 		if (m_vm == nullptr)
 			return glm::vec4(0.0f);
 
-		spvm_result_t fnMain = spvm_state_get_result(m_vm, "main");
-		if (fnMain == nullptr)
+		spvm_word fnMain = spvm_state_get_result_location(m_vm, "main");
+		if (fnMain == 0)
 			return glm::vec4(0.0f);
 
 		spvm_state_prepare(m_vm, fnMain);
@@ -783,13 +1092,27 @@ namespace ed {
 	}
 	void DebugInformation::PreparePixelShader(PipelineItem* owner, PipelineItem* item, PixelInformation* px)
 	{
+		m_stage = ShaderStage::Pixel;
+
 		m_resetVM();
-		m_setupVM(((pipe::ShaderPass*)owner->Data)->PSSPV);
+		if (owner->Type == PipelineItem::ItemType::ShaderPass)
+			m_setupVM(((pipe::ShaderPass*)owner->Data)->PSSPV);
+		else if (owner->Type == PipelineItem::ItemType::PluginItem) {
+			pipe::PluginItemData* plData = (pipe::PluginItemData*)owner->Data;
+
+			unsigned int spvSize = plData->Owner->PipelineItem_GetSPIRVSize(plData->Type, plData->PluginData, plugin::ShaderStage::Pixel);
+			std::vector<unsigned int> spv;
+			if (spvSize != 0) {
+				unsigned int* spvPtr = plData->Owner->PipelineItem_GetSPIRV(plData->Type, plData->PluginData, plugin::ShaderStage::Pixel);
+				spv = std::vector<unsigned int>(spvPtr, spvPtr + spvSize);
+			}
+			m_setupVM(spv);
+		}
 
 		// uniforms
 		m_copyUniforms(owner, item, px);
 
-		// copy uniforms values
+		// dfdx/y
 		if (m_vm->derivative_used) {
 			for (spvm_word i = 0; i < m_vm->owner->bound; i++) {
 				spvm_result_t slot = &m_vm->results[i];
@@ -810,8 +1133,6 @@ namespace ed {
 				}
 			}
 		}
-
-		m_stage = ShaderStage::Pixel;
 	}
 	void DebugInformation::SetPixelShaderInput(PixelInformation& pixel)
 	{
@@ -946,8 +1267,8 @@ namespace ed {
 		if (m_vm == nullptr)
 			return glm::vec4(0.0f);
 
-		spvm_result_t fnMain = spvm_state_get_result(m_vm, "main");
-		if (fnMain == nullptr)
+		spvm_word fnMain = spvm_state_get_result_location(m_vm, "main");
+		if (fnMain == 0)
 			return glm::vec4(0.0f);
 
 		spvm_state_prepare(m_vm, fnMain);
@@ -992,8 +1313,8 @@ namespace ed {
 
 	void DebugInformation::PrepareDebugger()
 	{
-		spvm_result_t fnMain = spvm_state_get_result(m_vm, "main");
-		if (fnMain == nullptr)
+		spvm_word fnMain = spvm_state_get_result_location(m_vm, "main");
+		if (fnMain == 0)
 			return;
 
 		m_funcStackLines.clear();
@@ -1004,7 +1325,6 @@ namespace ed {
 		if (m_stage == ShaderStage::Pixel && m_pixel != nullptr)
 			spvm_state_set_frag_coord(m_vm, m_pixel->Coordinate.x + 0.5f, m_pixel->Coordinate.y + 0.5f, 1.0f, 1.0f); // TODO: z and w components
 
-
 		// move to cursor to first line in the function
 		spvm_state_step_into(m_vm);
 		if (m_vm->owner->language == SpvSourceLanguageHLSL) {
@@ -1014,19 +1334,51 @@ namespace ed {
 		}
 
 		m_funcStackLines[0] = m_vm->current_line;
+
+#ifdef BUILD_IMMEDIATE_MODE
+		// prepare immediate mode compiler
+		m_compiler.SetSPIRV(m_spv);
+#endif
 	}
 
 	void DebugInformation::ClearWatchList()
 	{
+		for (auto& expr : m_watchExprs)
+			free(expr);
+
+		m_watchExprs.clear();
+		m_watchValues.clear();
 	}
 	void DebugInformation::RemoveWatch(size_t index)
 	{
+		free(m_watchExprs[index]);
+		m_watchExprs.erase(m_watchExprs.begin() + index);
+		m_watchValues.erase(m_watchValues.begin() + index);
 	}
 	void DebugInformation::AddWatch(const std::string& expr, bool execute)
 	{
+		char* data = (char*)calloc(512, sizeof(char));
+		strcpy(data, expr.c_str());
+
+		m_watchExprs.push_back(data);
+		m_watchValues.push_back("");
+
+		if (execute)
+			UpdateWatchValue(m_watchExprs.size() - 1);
 	}
 	void DebugInformation::UpdateWatchValue(size_t index)
 	{
+		char* expr = m_watchExprs[index];
+
+		spvm_result_t resType = nullptr;
+		spvm_result_t exprVal = Immediate(std::string(expr), resType);
+		
+		if (exprVal != nullptr && resType != nullptr) {
+			std::stringstream ss;
+			GetVariableValueAsString(ss, m_vmImmediate, resType, exprVal->members, exprVal->member_count, "");
+			m_watchValues[index] = ss.str();
+		} else
+			m_watchValues[index] = "ERROR";
 	}
 
 	void DebugInformation::Jump(int line)
@@ -1074,7 +1426,8 @@ namespace ed {
 				break;
 		}
 
-		m_vm->current_line = m_funcStackLines[m_vm->function_stack_current];
+		if (m_vm->function_stack_current != -1)
+			m_vm->current_line = m_funcStackLines[m_vm->function_stack_current];
 	}
 	bool DebugInformation::CheckBreakpoint(int line)
 	{
@@ -1082,13 +1435,23 @@ namespace ed {
 		dbg::Breakpoint* brk = GetBreakpoint(m_file, line, enabled);
 
 		if (brk != nullptr && enabled) {
-			// TODO: conditional breakpoints
+			if (brk->IsConditional && !brk->Condition.empty()) {
+				spvm_result_t resType = nullptr;
+				spvm_result_t brkResult = Immediate(brk->Condition, resType);
+
+				if (brkResult != nullptr && resType != nullptr && (resType->value_type == spvm_value_type_bool || resType->value_type == spvm_value_type_int) && brkResult->member_count == 1)
+					return brkResult->members[0].value.b;
+				else {
+					m_msgs->Add(MessageStack::Type::Warning, "", "Invalid breakpoint condition on line " + std::to_string(line));
+					return false;
+				}
+			}
+			
 			return true;
 		}
 
 		return false;
 	}
-
 
 	void DebugInformation::ClearPixelList()
 	{

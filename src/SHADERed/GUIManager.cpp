@@ -3,13 +3,13 @@
 #include <SHADERed/InterfaceManager.h>
 #include <SHADERed/Objects/CameraSnapshots.h>
 #include <SHADERed/Objects/Export/ExportCPP.h>
-#include <SHADERed/Objects/ChangelogFetcher.h>
-#include <SHADERed/Objects/TipFetcher.h>
 #include <SHADERed/Objects/FunctionVariableManager.h>
 #include <SHADERed/Objects/KeyboardShortcuts.h>
 #include <SHADERed/Objects/Logger.h>
 #include <SHADERed/Objects/Names.h>
 #include <SHADERed/Objects/Settings.h>
+#include <SHADERed/Objects/SPIRVParser.h>
+#include <SHADERed/Objects/ShaderCompiler.h>
 #include <SHADERed/Objects/SystemVariableManager.h>
 #include <SHADERed/Objects/ThemeContainer.h>
 #include <SHADERed/UI/CodeEditorUI.h>
@@ -33,6 +33,7 @@
 #include <imgui/examples/imgui_impl_opengl3.h>
 #include <imgui/examples/imgui_impl_sdl.h>
 #include <imgui/imgui.h>
+#include <ImGuiFileDialog/ImGuiFileDialog.h>
 
 #include <filesystem>
 #include <fstream>
@@ -52,6 +53,7 @@
 #elif defined(_WIN32)
 #include <windows.h>
 #endif
+#include <queue>
 
 #define HARRAYSIZE(a) (sizeof(a) / sizeof(*a))
 #define TOOLBAR_HEIGHT 48
@@ -77,9 +79,9 @@ namespace ed {
 		m_isCreateItemPopupOpened = false;
 		m_isCreateCubemapOpened = false;
 		m_isCreateRTOpened = false;
+		m_isCreateKBTxtOpened = false;
 		m_isCreateBufferOpened = false;
 		m_isNewProjectPopupOpened = false;
-		m_isUpdateNotificationOpened = false;
 		m_isRecordCameraSnapshotOpened = false;
 		m_exportAsCPPOpened = false;
 		m_isCreateImgOpened = false;
@@ -110,6 +112,22 @@ namespace ed {
 		m_recompiledAll = false;
 		m_isIncompatPluginsOpened = false;
 		m_minimalMode = false;
+		m_cubemapPathPtr = nullptr;
+
+		m_isBrowseOnlineOpened = false;
+		memset(&m_onlineQuery, 0, sizeof(m_onlineQuery));
+		memset(&m_onlineUsername, 0, sizeof(m_onlineUsername));
+		m_onlinePage = 0;
+		m_onlineShaderPage = 0;
+		m_onlinePluginPage = 0;
+		m_onlineThemePage = 0;
+		m_onlineIsShader = true;
+		m_onlineIsPlugin = false;
+		m_onlineExcludeGodot = false;
+
+		m_uiIniFile = "data/workspace.dat";
+		if (!ed::Settings::Instance().LinuxHomeDirectory.empty())
+			m_uiIniFile = ed::Settings::Instance().LinuxHomeDirectory + m_uiIniFile;
 
 		Settings::Instance().Load();
 		m_loadTemplateList();
@@ -126,9 +144,14 @@ namespace ed {
 
 		ImGuiIO& io = ImGui::GetIO();
 		io.Fonts->AddFontDefault();
-		io.IniFilename = IMGUI_INI_FILE;
+		io.IniFilename = m_uiIniFile.c_str();
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NoMouseCursorChange | ImGuiConfigFlags_DockingEnable /*| ImGuiConfigFlags_ViewportsEnable TODO: allow this on windows? test on linux?*/;
 		io.ConfigDockingWithShift = false;
+
+		if (!ed::Settings::Instance().LinuxHomeDirectory.empty()) {
+			if (!std::filesystem::exists(m_uiIniFile) && std::filesystem::exists("data/workspace.dat"))
+				ImGui::LoadIniSettingsFromDisk("data/workspace.dat");
+		}
 
 		ImGuiStyle& style = ImGui::GetStyle();
 		style.WindowMenuButtonPosition = ImGuiDir_Right;
@@ -164,8 +187,7 @@ namespace ed {
 
 		// turn on the tracker on startup
 		((CodeEditorUI*)Get(ViewID::Code))->SetTrackFileChanges(Settings::Instance().General.RecompileOnFileChange);
-		((CodeEditorUI*)Get(ViewID::Code))->SetAutoRecompile(Settings::Instance().General.AutoRecompile);
-
+		
 		((OptionsUI*)m_options)->SetGroup(OptionsUI::Page::General);
 
 		// enable dpi awareness
@@ -186,14 +208,66 @@ namespace ed {
 		FunctionVariableManager::Instance().Initialize(&objects->Pipeline);
 		m_data->Renderer.Pause(Settings::Instance().Preview.PausedOnStartup);
 
+		m_kbInfo.SetText(std::string(KEYBOARD_KEYCODES_TEXT));
+		m_kbInfo.SetPalette(ThemeContainer::Instance().GetTextEditorStyle(Settings::Instance().Theme));
+		m_kbInfo.SetHighlightLine(true);
+		m_kbInfo.SetShowLineNumbers(true);
+		m_kbInfo.SetLanguageDefinition(TextEditor::LanguageDefinition::GLSL());
+		m_kbInfo.SetReadOnly(true);
+
+		// load snippets
+		((CodeEditorUI*)Get(ViewID::Code))->LoadSnippets();
+
+		// load file dialog bookmarks
+		std::string bookmarksFileLoc = "data/bookmarks.dat";
+		if (!ed::Settings::Instance().LinuxHomeDirectory.empty())
+			bookmarksFileLoc = ed::Settings::Instance().LinuxHomeDirectory + "data/bookmarks.dat";
+		std::ifstream bookmarksFile(bookmarksFileLoc);
+		std::string bookmarksString((std::istreambuf_iterator<char>(bookmarksFile)), std::istreambuf_iterator<char>());
+		igfd::ImGuiFileDialog::Instance()->DeserializeBookmarks(bookmarksString);
+
+		// setup splash screen
 		m_splashScreenLoad();
+
+		// load recents
+		std::string currentInfoPath = "info.dat";
+		if (!ed::Settings().Instance().LinuxHomeDirectory.empty())
+			currentInfoPath = ed::Settings().Instance().LinuxHomeDirectory + currentInfoPath;
+
+		int recentsSize = 0;
+		std::ifstream infoReader(currentInfoPath);
+		infoReader.ignore(128, '\n');
+		infoReader >> recentsSize;
+		infoReader.ignore(128, '\n');
+		m_recentProjects = std::vector<std::string>(recentsSize);
+		for (int i = 0; i < recentsSize; i++) {
+			std::getline(infoReader, m_recentProjects[i]);
+			if (infoReader.eof())
+				break;
+		}
+		infoReader.close();
 	}
 	GUIManager::~GUIManager()
 	{
 		glDeleteShader(Magnifier::Shader);
 
-		std::ofstream verWriter("current_version.txt");
-		verWriter << UpdateChecker::MyVersion;
+		for (int i = 0; i < m_onlineShaderThumbnail.size(); i++)
+			glDeleteTextures(1, &m_onlineShaderThumbnail[i]);
+		m_onlineShaderThumbnail.clear();
+
+		for (int i = 0; i < m_onlinePluginThumbnail.size(); i++)
+			glDeleteTextures(1, &m_onlinePluginThumbnail[i]);
+		m_onlinePluginThumbnail.clear();
+
+		std::string currentInfoPath = "info.dat";
+		if (!ed::Settings().Instance().LinuxHomeDirectory.empty())
+			currentInfoPath = ed::Settings().Instance().LinuxHomeDirectory + currentInfoPath;
+		
+		std::ofstream verWriter(currentInfoPath);
+		verWriter << WebAPI::InternalVersion << std::endl;
+		verWriter << m_recentProjects.size() << std::endl;
+		for (int i = 0; i < m_recentProjects.size(); i++)
+			verWriter << m_recentProjects[i] << std::endl;
 		verWriter.close();
 
 		Logger::Get().Log("Shutting down UI");
@@ -233,7 +307,7 @@ namespace ed {
 				}
 			}
 		} else if (e.type == SDL_MOUSEMOTION)
-			m_perfModeClock.restart();
+			m_perfModeClock.Restart();
 		else if (e.type == SDL_DROPFILE) {
 
 			char* droppedFile = e.drop.file;
@@ -313,7 +387,6 @@ namespace ed {
 		m_performanceMode = m_perfModeFake;
 
 		// update audio textures
-		m_data->Objects.Update(delta);
 		FunctionVariableManager::Instance().ClearVariableList();
 
 		// update editor & workspace font
@@ -390,7 +463,7 @@ namespace ed {
 			m_renderToolbar();
 
 		// create a fullscreen imgui panel that will host a dockspace
-		bool showMenu = !m_minimalMode && !(m_performanceMode && settings.Preview.HideMenuInPerformanceMode && m_perfModeClock.getElapsedTime().asSeconds() > 2.5f);
+		bool showMenu = !m_minimalMode && !(m_performanceMode && settings.Preview.HideMenuInPerformanceMode && m_perfModeClock.GetElapsedTime() > 2.5f);
 		ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | (ImGuiWindowFlags_MenuBar * showMenu) | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
 		ImGuiViewport* viewport = ImGui::GetMainViewport();
 		ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + actuallyToolbar * Settings::Instance().CalculateSize(TOOLBAR_HEIGHT)));
@@ -426,6 +499,106 @@ namespace ed {
 			((CodeEditorUI*)Get(ViewID::Code))->EmptyTrackedFiles();
 		}
 		((CodeEditorUI*)Get(ViewID::Code))->UpdateAutoRecompileItems();
+
+		// parse
+		if (!m_data->Renderer.SPIRVQueue.empty()) {
+			auto& spvQueue = m_data->Renderer.SPIRVQueue;
+			CodeEditorUI* codeEditor = ((CodeEditorUI*)Get(ViewID::Code));
+			for (int i = 0; i < spvQueue.size(); i++) {
+				bool hasDups = false;
+
+				PipelineItem* spvItem = spvQueue[i];
+
+				if (i + 1 < spvQueue.size())
+					if (std::count(spvQueue.begin() + i + 1, spvQueue.end(), spvItem) > 0)
+						hasDups = true;
+			
+				if (!hasDups) {
+					SPIRVParser spvParser;
+					if (spvItem->Type == PipelineItem::ItemType::ShaderPass) {
+						pipe::ShaderPass* pass = (pipe::ShaderPass*)spvItem->Data;
+						std::vector<std::string> allUniforms;
+						
+						bool deleteUnusedVariables = true;
+
+						if (pass->PSSPV.size() > 0) {
+							int langID = -1;
+							IPlugin1* plugin = ShaderCompiler::GetPluginLanguageFromExtension(&langID, pass->PSPath, m_data->Plugins.Plugins());
+
+							deleteUnusedVariables &= (plugin == nullptr || (plugin != nullptr && plugin->CustomLanguage_SupportsAutoUniforms(langID)));
+
+							spvParser.Parse(pass->PSSPV);
+							TextEditor* tEdit = codeEditor->Get(spvItem, ed::ShaderStage::Pixel);
+							if (tEdit != nullptr) codeEditor->FillAutocomplete(tEdit, spvParser);
+							if (settings.General.AutoUniforms && (plugin == nullptr || (plugin != nullptr && plugin->CustomLanguage_SupportsAutoUniforms(langID))))
+								m_autoUniforms(pass->Variables, spvParser, allUniforms);
+						}
+						if (pass->VSSPV.size() > 0) {
+							int langID = -1;
+							IPlugin1* plugin = ShaderCompiler::GetPluginLanguageFromExtension(&langID, pass->VSPath, m_data->Plugins.Plugins());
+
+							deleteUnusedVariables &= (plugin == nullptr || (plugin != nullptr && plugin->CustomLanguage_SupportsAutoUniforms(langID)));
+
+							spvParser.Parse(pass->VSSPV);
+							TextEditor* tEdit = codeEditor->Get(spvItem, ed::ShaderStage::Vertex);
+							if (tEdit != nullptr) codeEditor->FillAutocomplete(tEdit, spvParser);
+							if (settings.General.AutoUniforms && (plugin == nullptr || (plugin != nullptr && plugin->CustomLanguage_SupportsAutoUniforms(langID))))
+								m_autoUniforms(pass->Variables, spvParser, allUniforms);
+						}
+						if (pass->GSSPV.size() > 0) {
+							int langID = -1;
+							IPlugin1* plugin = ShaderCompiler::GetPluginLanguageFromExtension(&langID, pass->GSPath, m_data->Plugins.Plugins());
+
+							deleteUnusedVariables &= (plugin == nullptr || (plugin != nullptr && plugin->CustomLanguage_SupportsAutoUniforms(langID)));
+
+							spvParser.Parse(pass->GSSPV);
+							TextEditor* tEdit = codeEditor->Get(spvItem, ed::ShaderStage::Geometry);
+							if (tEdit != nullptr) codeEditor->FillAutocomplete(tEdit, spvParser);
+							if (settings.General.AutoUniforms && (plugin == nullptr || (plugin != nullptr && plugin->CustomLanguage_SupportsAutoUniforms(langID))))
+								m_autoUniforms(pass->Variables, spvParser, allUniforms);
+						}
+
+						if (settings.General.AutoUniforms && deleteUnusedVariables && settings.General.AutoUniformsDelete && pass->VSSPV.size() > 0 && pass->PSSPV.size() > 0 && ((pass->GSUsed && pass->GSSPV.size()>0) || !pass->GSUsed))
+							m_deleteUnusedUniforms(pass->Variables, allUniforms);
+					} else if (spvItem->Type == PipelineItem::ItemType::ComputePass) {
+						pipe::ComputePass* pass = (pipe::ComputePass*)spvItem->Data;
+						std::vector<std::string> allUniforms;
+
+						if (pass->SPV.size() > 0) {
+							int langID = -1;
+							IPlugin1* plugin = ShaderCompiler::GetPluginLanguageFromExtension(&langID, pass->Path, m_data->Plugins.Plugins());
+
+							spvParser.Parse(pass->SPV);
+							TextEditor* tEdit = codeEditor->Get(spvItem, ed::ShaderStage::Compute);
+							if (tEdit != nullptr) codeEditor->FillAutocomplete(tEdit, spvParser);
+							if (settings.General.AutoUniforms && (plugin == nullptr || (plugin != nullptr && plugin->CustomLanguage_SupportsAutoUniforms(langID)))) {
+								m_autoUniforms(pass->Variables, spvParser, allUniforms);
+								if (settings.General.AutoUniformsDelete)
+									m_deleteUnusedUniforms(pass->Variables, allUniforms);
+							}
+						}
+					} else if (spvItem->Type == PipelineItem::ItemType::PluginItem) {
+						pipe::PluginItemData* pass = (pipe::PluginItemData*)spvItem->Data;
+						std::vector<std::string> allUniforms;
+
+						for (int k = 0; k < (int)ShaderStage::Count; k++) {
+							TextEditor* tEdit = codeEditor->Get(spvItem, (ed::ShaderStage)k);
+							if (tEdit == nullptr) continue;
+
+							unsigned int spvSize = pass->Owner->PipelineItem_GetSPIRVSize(pass->Type, pass->PluginData, (plugin::ShaderStage)k);
+							if (spvSize > 0) {
+								unsigned int* spv = pass->Owner->PipelineItem_GetSPIRV(pass->Type, pass->PluginData, (plugin::ShaderStage)k);
+								std::vector<unsigned int> spvVec(spv, spv + spvSize);
+
+								spvParser.Parse(spvVec);
+								codeEditor->FillAutocomplete(tEdit, spvParser);
+							}
+						}
+					}
+				}
+			}
+			spvQueue.clear();
+		}
 
 		// menu
 		if (showMenu && ImGui::BeginMainMenuBar()) {
@@ -465,18 +638,8 @@ namespace ed {
 
 					ImGui::EndMenu();
 				}
-				if (ImGui::MenuItem("Create shader file")) {
-					std::string file;
-					bool success = UIHelper::GetSaveFileDialog(file, "*.glsl;*.hlsl;*.vert;*.frag;*.geom");
-
-					if (success) {
-						// create a file (cross platform)
-						std::ofstream ofs(file);
-						ofs << "// empty shader file\n";
-						ofs.close();
-					}
-				}
 				if (ImGui::MenuItem("Open", KeyboardShortcuts::Instance().GetString("Project.Open").c_str())) {
+					
 					bool cont = true;
 					if (m_data->Parser.IsProjectModified()) {
 						int btnID = this->AreYouSure();
@@ -484,13 +647,37 @@ namespace ed {
 							cont = false;
 					}
 
-					if (cont) {
-						std::string file;
-						bool success = UIHelper::GetOpenFileDialog(file, "*.sprj");
+					if (cont)
+						igfd::ImGuiFileDialog::Instance()->OpenModal("OpenProjectDlg", "Open SHADERed project", "SHADERed project (*.sprj){.sprj},.*", ".");
+				}
+				if (ImGui::BeginMenu("Open Recent")) {
+					int recentCount = 0;
+					for (int i = 0; i < m_recentProjects.size(); i++) {
+						std::filesystem::path path(m_recentProjects[i]);
+						if (!std::filesystem::exists(path))
+							continue;
 
-						if (success)
-							Open(file);
+						recentCount++;
+						if (ImGui::MenuItem(path.filename().string().c_str())) {
+							bool cont = true;
+							if (m_data->Parser.IsProjectModified()) {
+								int btnID = this->AreYouSure();
+								if (btnID == 2)
+									cont = false;
+							}
+
+							if (cont)
+								this->Open(m_recentProjects[i]);
+						}
 					}
+
+					if (recentCount == 0)
+						ImGui::Text("No projects opened recently");
+
+					ImGui::EndMenu();
+				}
+				if (ImGui::MenuItem("Browse online")) {
+					m_isBrowseOnlineOpened = true;
 				}
 				if (ImGui::MenuItem("Save", KeyboardShortcuts::Instance().GetString("Project.Save").c_str()))
 					Save();
@@ -561,6 +748,19 @@ namespace ed {
 					if (ImGui::MenuItem("Empty 3D image", KeyboardShortcuts::Instance().GetString("Project.NewImage3D").c_str()))
 						this->CreateNewImage3D();
 
+					
+					bool hasKBTexture = m_data->Objects.HasKeyboardTexture();
+					if (hasKBTexture) {
+						ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+						ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+					}
+					if (ImGui::MenuItem("KeyboardTexture", KeyboardShortcuts::Instance().GetString("Project.NewKeyboardTexture").c_str()))
+						this->CreateKeyboardTexture();
+					if (hasKBTexture) {
+						ImGui::PopStyleVar();
+						ImGui::PopItemFlag();
+					}
+					
 					m_data->Plugins.ShowMenuItems("createitem");
 
 					ImGui::EndMenu();
@@ -580,6 +780,15 @@ namespace ed {
 					SystemVariableManager::Instance().Reset();
 					if (!m_data->Debugger.IsDebugging() && m_data->Debugger.GetPixelList().size() == 0)
 						m_data->Renderer.Render();
+				}
+				if (ImGui::MenuItem("Reload textures")) {
+					const std::vector<std::string>& objs = m_data->Objects.GetObjects();
+					
+					for (const auto& obj : objs) {
+						ObjectManagerItem* item = m_data->Objects.GetObjectManagerItem(obj);
+						if (item->IsTexture && !item->IsKeyboardTexture && !item->IsCube)
+							m_data->Objects.ReloadTexture(item, obj);
+					}
 				}
 				if (ImGui::MenuItem("Options")) {
 					m_optionsOpened = true;
@@ -606,6 +815,7 @@ namespace ed {
 					}
 
 					for (auto& dview : m_debugViews) {
+#ifndef BUILD_IMMEDIATE_MODE
 						bool isTempDisabled = (dview->Name == "Immediate" || dview->Name == "Watches"); // remove this later
 
 						if (isTempDisabled) {
@@ -613,13 +823,16 @@ namespace ed {
 							ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
 							dview->Visible = false;
 						}
-						
+#endif
+
 						ImGui::MenuItem(dview->Name.c_str(), 0, &dview->Visible);
 
+#ifndef BUILD_IMMEDIATE_MODE
 						if (isTempDisabled) {
 							ImGui::PopStyleVar();
 							ImGui::PopItemFlag();
 						}
+#endif
 					}
 
 					if (!m_data->Debugger.IsDebugging()) {
@@ -653,7 +866,7 @@ namespace ed {
 				}
 				ImGui::Separator();
 				if (ImGui::MenuItem("Tutorial"))
-					UIHelper::ShellOpen("https://github.com/dfranx/SHADERed/blob/master/TUTORIAL.md");
+					UIHelper::ShellOpen("http://docs.shadered.org");
 
 				if (ImGui::MenuItem("Send feedback"))
 					UIHelper::ShellOpen("https://www.github.com/dfranx/SHADERed/issues");
@@ -666,7 +879,8 @@ namespace ed {
 			if (ImGui::BeginMenu("Supporters")) {
 				static const std::vector<std::pair<std::string, std::string>> slist = {
 					std::make_pair("Hugo Locurcio", "https://hugo.pro"),
-					std::make_pair("Vladimir Alyamkin", "https://alyamkin.com")
+					std::make_pair("Vladimir Alyamkin", "https://alyamkin.com"),
+					std::make_pair("Wogos Media", "http://theWogos.com"),
 				};
 
 				for (auto& sitem : slist)
@@ -685,6 +899,8 @@ namespace ed {
 		ImGui::End();
 
 		if (!m_performanceMode && !m_minimalMode) {
+			m_data->Plugins.Update(delta);
+
 			for (auto& view : m_views)
 				if (view->Visible) {
 					ImGui::SetNextWindowSizeConstraints(ImVec2(80, 80), ImVec2(m_width * 2, m_height * 2));
@@ -692,15 +908,23 @@ namespace ed {
 					ImGui::End();
 				}
 			if (m_data->Debugger.IsDebugging()) {
-				for (auto& dview : m_debugViews)
+				for (auto& dview : m_debugViews) {
+#ifdef BUILD_IMMEDIATE_MODE
+					if (dview->Visible) {
+						ImGui::SetNextWindowSizeConstraints(ImVec2(80, 80), ImVec2(m_width * 2, m_height * 2));
+						if (ImGui::Begin(dview->Name.c_str(), &dview->Visible)) dview->Update(delta);
+						ImGui::End();
+					}
+#else
 					if (dview->Visible && (dview->Name != "Immediate" && dview->Name != "Watches")) {
 						ImGui::SetNextWindowSizeConstraints(ImVec2(80, 80), ImVec2(m_width * 2, m_height * 2));
 						if (ImGui::Begin(dview->Name.c_str(), &dview->Visible)) dview->Update(delta);
 						ImGui::End();
 					}
+#endif
+				}
 			}
 
-			m_data->Plugins.Update(delta);
 			Get(ViewID::Code)->Update(delta);
 
 			// object preview
@@ -793,7 +1017,13 @@ namespace ed {
 			m_isCreateRTOpened = false;
 		}
 
-		// open popup for openning new project
+		// open popup for creating keyboard texture
+		if (m_isCreateKBTxtOpened) {
+			ImGui::OpenPopup("Create KeyboardTexture##main_create_kbtxt");
+			m_isCreateKBTxtOpened = false;
+		}
+
+		// open popup for opening new project
 		if (m_isNewProjectPopupOpened) {
 			ImGui::OpenPopup("Are you sure?##main_new_proj");
 			m_isNewProjectPopupOpened = false;
@@ -830,6 +1060,328 @@ namespace ed {
 			m_tipOpened = false;
 		}
 
+		// open browse online window
+		if (m_isBrowseOnlineOpened) {
+			ImGui::OpenPopup("Browse online##browse_online");
+
+			memset(&m_onlineQuery, 0, sizeof(m_onlineQuery));
+			memset(&m_onlineUsername, 0, sizeof(m_onlineUsername));
+
+			if (m_onlineShaders.size() == 0)
+				m_onlineSearchShaders();
+			if (m_onlinePlugins.size() == 0)
+				m_onlineSearchPlugins();
+			if (m_onlineThemes.size() == 0)
+				m_onlineSearchThemes();
+
+			m_isBrowseOnlineOpened = false;
+		}
+
+		// File dialogs (open project, create texture, create audio, pick cubemap face texture)
+		if (igfd::ImGuiFileDialog::Instance()->FileDialog("OpenProjectDlg")) {
+			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+				std::string filePathName = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				Open(filePathName);
+			}
+
+			igfd::ImGuiFileDialog::Instance()->CloseDialog("OpenProjectDlg");
+		}
+		if (igfd::ImGuiFileDialog::Instance()->FileDialog("CreateTextureDlg")) {
+			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+				auto sel = igfd::ImGuiFileDialog::Instance()->GetSelection();
+
+				for (auto pair : sel) {
+					std::string file = m_data->Parser.GetRelativePath(pair.second);
+					if (!file.empty())
+						m_data->Objects.CreateTexture(file);
+				}
+			}
+
+			igfd::ImGuiFileDialog::Instance()->CloseDialog("CreateTextureDlg");
+		}
+		if (igfd::ImGuiFileDialog::Instance()->FileDialog("CreateAudioDlg")) {
+			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+				std::string filepath = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				std::string rfile = m_data->Parser.GetRelativePath(filepath);
+				if (!rfile.empty())
+					m_data->Objects.CreateAudio(rfile);
+			}
+
+			igfd::ImGuiFileDialog::Instance()->CloseDialog("CreateAudioDlg");
+		}
+		if (igfd::ImGuiFileDialog::Instance()->FileDialog("SaveProjectDlg")) {
+			if (igfd::ImGuiFileDialog::Instance()->IsOk) {
+				if (m_saveAsPreHandle)
+					m_saveAsPreHandle();
+
+				std::string file = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				m_data->Parser.SaveAs(file, true);
+
+				// cache opened code editors
+				CodeEditorUI* editor = ((CodeEditorUI*)Get(ViewID::Code));
+				std::vector<std::pair<std::string, ShaderStage>> files = editor->GetOpenedFiles();
+				std::vector<std::string> filesData = editor->GetOpenedFilesData();
+
+				// close all
+				this->ResetWorkspace();
+
+				m_data->Parser.Open(file);
+
+				std::string projName = m_data->Parser.GetOpenedFile();
+				projName = projName.substr(projName.find_last_of("/\\") + 1);
+
+				SDL_SetWindowTitle(m_wnd, ("SHADERed (" + projName + ")").c_str());
+
+				// return cached state
+				if (m_saveAsRestoreCache) {
+					for (auto& file : files) {
+						PipelineItem* item = m_data->Pipeline.Get(file.first.c_str());
+						editor->Open(item, file.second);
+					}
+					editor->SetOpenedFilesData(filesData);
+					editor->SaveAll();
+				}
+			}
+
+			if (m_saveAsHandle != nullptr)
+				m_saveAsHandle(igfd::ImGuiFileDialog::Instance()->IsOk);
+
+			igfd::ImGuiFileDialog::Instance()->CloseDialog("SaveProjectDlg");
+		}
+
+		// Create RT popup
+		ImGui::SetNextWindowSize(ImVec2(Settings::Instance().CalculateSize(830), Settings::Instance().CalculateSize(550)), ImGuiCond_FirstUseEver);
+		if (ImGui::BeginPopupModal("Browse online##browse_online")) {
+			int startY = ImGui::GetCursorPosY();
+			ImGui::Text("Query:");
+			ImGui::SameLine();
+			ImGui::SetCursorPosX(Settings::Instance().CalculateSize(75));
+			ImGui::PushItemWidth(-Settings::Instance().CalculateSize(110));
+			ImGui::InputText("##online_query", m_onlineQuery, sizeof(m_onlineQuery));
+			ImGui::PopItemWidth();
+			int startX = ImGui::GetCursorPosX();
+
+			ImGui::Text("By:");
+			ImGui::SameLine();
+			ImGui::SetCursorPosX(Settings::Instance().CalculateSize(75));
+			ImGui::PushItemWidth(-Settings::Instance().CalculateSize(110));
+			ImGui::InputText("##online_username", m_onlineUsername, sizeof(m_onlineUsername));
+			ImGui::PopItemWidth();
+			int endY = ImGui::GetCursorPosY();
+
+			ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - Settings::Instance().CalculateSize(90), startY));
+			if (ImGui::Button("SEARCH", ImVec2(Settings::Instance().CalculateSize(70), endY-startY))) {
+				if (m_onlineIsShader)
+					m_onlineShaderPage = 0;
+				else if (m_onlineIsPlugin)
+					m_onlinePluginPage = 0;
+				else
+					m_onlineThemePage = 0;
+				m_onlineSearchShaders();
+			}
+
+			bool hasNext = true;
+
+			if (ImGui::BeginTabBar("BrowseOnlineTabBar")) {
+				if (ImGui::BeginTabItem("Shaders")) {
+					m_onlineIsShader = true;
+					m_onlineIsPlugin = false;
+					m_onlinePage = m_onlineShaderPage;
+					hasNext = m_onlineShaders.size() > 12;
+
+					ImGui::BeginChild("##online_shader_container", ImVec2(0, Settings::Instance().CalculateSize(-60)));
+
+					if (ImGui::BeginTable("##shaders_table", 2, ImGuiTableFlags_None)) {
+						ImGui::TableSetupColumn("Thumbnail", ImGuiTableColumnFlags_WidthAlwaysAutoResize);
+						ImGui::TableSetupColumn("Info", ImGuiTableColumnFlags_WidthStretch);
+						ImGui::TableAutoHeaders();
+
+						for (int i = 0; i < std::min<int>(12, m_onlineShaders.size()); i++) {
+							const ed::WebAPI::ShaderResult& shaderInfo = m_onlineShaders[i];
+
+							ImGui::TableNextRow();
+
+							ImGui::TableSetColumnIndex(0);
+							ImGui::Image((ImTextureID)m_onlineShaderThumbnail[i], ImVec2(256, 144), ImVec2(0, 1), ImVec2(1, 0));
+
+							ImGui::TableSetColumnIndex(1);
+							ImGui::Text("%s", shaderInfo.Title.c_str()); // just in case someone has a %s or sth in the title, so that the app doesn't crash :'D
+							ImGui::Text("Language: %s", shaderInfo.Language.c_str());
+							ImGui::Text("%d view(s)", shaderInfo.Views);
+							ImGui::Text("by: %s", shaderInfo.Owner.c_str());
+
+							ImGui::PushID(i);
+							if (ImGui::Button("OPEN")) {
+								CodeEditorUI* codeUI = ((CodeEditorUI*)Get(ViewID::Code));
+								codeUI->SetTrackFileChanges(false);
+
+								bool ret = m_data->API.DownloadShaderProject(shaderInfo.ID);
+								if (ret) {
+									std::string outputPath = "temp/";
+									if (!ed::Settings::Instance().LinuxHomeDirectory.empty())
+										outputPath = ed::Settings::Instance().LinuxHomeDirectory + "temp/";
+
+									Open(outputPath + "project.sprj");
+									m_data->Parser.SetOpenedFile("");
+									ImGui::CloseCurrentPopup();
+								}
+
+								codeUI->SetTrackFileChanges(Settings::Instance().General.RecompileOnFileChange);
+							}
+							ImGui::PopID();
+						}
+
+						ImGui::EndTable();
+					}
+
+					ImGui::EndChild();
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("Plugins")) {
+					m_onlineIsShader = false;
+					m_onlineIsPlugin = true;
+					m_onlinePage = m_onlinePluginPage;
+					hasNext = m_onlinePlugins.size() > 12;
+
+					ImGui::BeginChild("##online_plugin_container", ImVec2(0, Settings::Instance().CalculateSize(-60)));
+
+					if (ImGui::BeginTable("##plugins_table", 2, ImGuiTableFlags_None)) {
+						ImGui::TableSetupColumn("Thumbnail", ImGuiTableColumnFlags_WidthAlwaysAutoResize);
+						ImGui::TableSetupColumn("Info", ImGuiTableColumnFlags_WidthStretch);
+						ImGui::TableAutoHeaders();
+
+						for (int i = 0; i < std::min<int>(12, m_onlinePlugins.size()); i++) {
+							const ed::WebAPI::PluginResult& pluginInfo = m_onlinePlugins[i];
+
+							ImGui::TableNextRow();
+
+							ImGui::TableSetColumnIndex(0);
+							ImGui::Image((ImTextureID)m_onlinePluginThumbnail[i], ImVec2(256, 144), ImVec2(0, 1), ImVec2(1, 0));
+
+							ImGui::TableSetColumnIndex(1);
+							ImGui::Text("%s", pluginInfo.Title.c_str()); // just in case someone has a %s or sth in the title, so that the app doesn't crash :'D
+							ImGui::TextWrapped("%s", pluginInfo.Description.c_str());
+							ImGui::Text("%d download(s)", pluginInfo.Downloads);
+							ImGui::Text("by: %s", pluginInfo.Owner.c_str());
+
+							if (m_data->Plugins.GetPlugin(pluginInfo.ID) == nullptr && std::count(m_onlineInstalledPlugins.begin(), m_onlineInstalledPlugins.end(), pluginInfo.ID) == 0) {
+								ImGui::PushID(i);
+								if (ImGui::Button("DOWNLOAD")) {
+									m_onlineInstalledPlugins.push_back(pluginInfo.ID); // since PluginManager's GetPlugin won't register it immediately
+									m_data->API.DownloadPlugin(pluginInfo.ID);
+								}
+								ImGui::PopID();
+							} else {
+								ImGui::Text("Plugin already installed!");
+							}
+						}
+
+						ImGui::EndTable();
+					}
+
+					ImGui::EndChild();
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("Themes")) {
+					m_onlineIsShader = false;
+					m_onlineIsPlugin = false;
+					m_onlinePage = m_onlineThemePage;
+
+					hasNext = m_onlineThemes.size() > 12;
+
+					ImGui::BeginChild("##online_theme_container", ImVec2(0, Settings::Instance().CalculateSize(-60)));
+
+					if (ImGui::BeginTable("##themes_table", 2, ImGuiTableFlags_None)) {
+						ImGui::TableSetupColumn("Thumbnail", ImGuiTableColumnFlags_WidthAlwaysAutoResize);
+						ImGui::TableSetupColumn("Info", ImGuiTableColumnFlags_WidthStretch);
+						ImGui::TableAutoHeaders();
+
+						for (int i = 0; i < std::min<int>(12, m_onlineThemes.size()); i++) {
+							const ed::WebAPI::ThemeResult& themeInfo = m_onlineThemes[i];
+
+							ImGui::TableNextRow();
+
+							ImGui::TableSetColumnIndex(0);
+							ImGui::Image((ImTextureID)m_onlineThemeThumbnail[i], ImVec2(256, 144), ImVec2(0, 1), ImVec2(1, 0));
+
+							ImGui::TableSetColumnIndex(1);
+							ImGui::Text("%s", themeInfo.Title.c_str()); // just in case someone has a %s or sth in the title, so that the app doesn't crash :'D
+							ImGui::TextWrapped("%s", themeInfo.Description.c_str());
+							ImGui::Text("%d download(s)", themeInfo.Downloads);
+							ImGui::Text("by: %s", themeInfo.Owner.c_str());
+
+							const auto& tList = ((ed::OptionsUI*)m_options)->GetThemeList();
+
+							if (std::count(tList.begin(), tList.end(), themeInfo.Title) == 0) {
+								ImGui::PushID(i);
+								if (ImGui::Button("DOWNLOAD")) {
+									m_data->API.DownloadTheme(themeInfo.ID);
+									((ed::OptionsUI*)m_options)->RefreshThemeList();
+								}
+								ImGui::PopID();
+							} else {
+								ImGui::PushID(i);
+								if (ImGui::Button("APPLY")) {
+									ed::Settings::Instance().Theme = themeInfo.Title;
+									((ed::OptionsUI*)m_options)->ApplyTheme();
+								}
+								ImGui::PopID();
+							}
+						}
+
+						ImGui::EndTable();
+					}
+
+					ImGui::EndChild();
+					ImGui::EndTabItem();
+				}
+				ImGui::EndTabBar();
+			}
+
+			
+			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - Settings::Instance().CalculateSize(180));
+			if (ImGui::Button("<<", ImVec2(Settings::Instance().CalculateSize(70), 0))) {
+				m_onlinePage = std::max<int>(0, m_onlinePage - 1);
+
+				if (m_onlineIsShader) m_onlineShaderPage = m_onlinePage;
+				else if (m_onlineIsPlugin) m_onlinePluginPage = m_onlinePage;
+				else m_onlineThemePage = m_onlinePage;
+
+				m_onlineSearchShaders();
+			}
+			ImGui::SameLine();
+			ImGui::Text("%d", m_onlinePage + 1);
+			ImGui::SameLine();
+			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - Settings::Instance().CalculateSize(90));
+			
+			if (!hasNext) {
+				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+			}
+			if (ImGui::Button(">>", ImVec2(Settings::Instance().CalculateSize(70), 0))) {
+				m_onlinePage++;
+				
+				if (m_onlineIsShader) m_onlineShaderPage = m_onlinePage;
+				else if (m_onlineIsPlugin) m_onlinePluginPage = m_onlinePage;
+				else m_onlineThemePage = m_onlinePage;
+
+				m_onlineSearchShaders();
+			}
+			if (!hasNext) {
+				ImGui::PopStyleVar();
+				ImGui::PopItemFlag();
+			}
+
+
+			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - Settings::Instance().CalculateSize(90));
+			if (ImGui::Button("Close", ImVec2(Settings::Instance().CalculateSize(70), 0))) {
+				ImGui::CloseCurrentPopup();
+			}
+
+
+			ImGui::EndPopup();
+		}
+
 		// Create Item popup
 		ImGui::SetNextWindowSize(ImVec2(Settings::Instance().CalculateSize(530), Settings::Instance().CalculateSize(300)), ImGuiCond_Always);
 		if (ImGui::BeginPopupModal("Create Item##main_create_item", 0, ImGuiWindowFlags_NoResize)) {
@@ -860,48 +1412,58 @@ namespace ed {
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##left")) {
-				UIHelper::GetOpenFileDialog(left, "*.png;*.bmp;*.jpg;*.jpeg;*.tga");
-				left = m_data->Parser.GetRelativePath(left);
+				m_cubemapPathPtr = &left;
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - left", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
 			ImGui::Text("Top: %s", std::filesystem::path(top).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##top")) {
-				UIHelper::GetOpenFileDialog(top, "*.png;*.bmp;*.jpg;*.jpeg;*.tga");
-				top = m_data->Parser.GetRelativePath(top);
+				m_cubemapPathPtr = &top;
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - top", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
 			ImGui::Text("Front: %s", std::filesystem::path(front).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##front")) {
-				UIHelper::GetOpenFileDialog(front, "*.png;*.bmp;*.jpg;*.jpeg;*.tga");
-				front = m_data->Parser.GetRelativePath(front);
+				m_cubemapPathPtr = &front;
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - front", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
 			ImGui::Text("Bottom: %s", std::filesystem::path(bottom).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##bottom")) {
-				UIHelper::GetOpenFileDialog(bottom, "*.png;*.bmp;*.jpg;*.jpeg;*.tga");
-				bottom = m_data->Parser.GetRelativePath(bottom);
+				m_cubemapPathPtr = &bottom;
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - bottom", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
 			ImGui::Text("Right: %s", std::filesystem::path(right).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##right")) {
-				UIHelper::GetOpenFileDialog(right, "*.png;*.bmp;*.jpg;*.jpeg;*.tga");
-				right = m_data->Parser.GetRelativePath(right);
+				m_cubemapPathPtr = &right;
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - right", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
 			}
 
 			ImGui::Text("Back: %s", std::filesystem::path(back).filename().string().c_str());
 			ImGui::SameLine();
 			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - btnWidth);
 			if (ImGui::Button("Change##back")) {
-				UIHelper::GetOpenFileDialog(back, "*.png;*.bmp;*.jpg;*.jpeg;*.tga");
-				back = m_data->Parser.GetRelativePath(back);
+				m_cubemapPathPtr = &back;
+				igfd::ImGuiFileDialog::Instance()->OpenModal("CubemapFaceDlg", "Select cubemap face - back", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
+			}
+
+			
+			if (igfd::ImGuiFileDialog::Instance()->FileDialog("CubemapFaceDlg")) {
+				if (igfd::ImGuiFileDialog::Instance()->IsOk && m_cubemapPathPtr != nullptr) {
+					std::string filepath = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+					*m_cubemapPathPtr = m_data->Parser.GetRelativePath(filepath);
+				}
+
+				igfd::ImGuiFileDialog::Instance()->CloseDialog("CubemapFaceDlg");
 			}
 
 			if (ImGui::Button("Ok") && strlen(buf) > 0 && !m_data->Objects.Exists(buf)) {
@@ -925,6 +1487,22 @@ namespace ed {
 					ImGui::CloseCurrentPopup();
 				}
 			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+
+		// Create KB texture
+		ImGui::SetNextWindowSize(ImVec2(Settings::Instance().CalculateSize(430), Settings::Instance().CalculateSize(155)), ImGuiCond_Always);
+		if (ImGui::BeginPopupModal("Create KeyboardTexture##main_create_kbtxt", 0, ImGuiWindowFlags_NoResize)) {
+			static char buf[65] = { 0 };
+			ImGui::InputText("Name", buf, 65);
+
+			if (ImGui::Button("Ok")) {
+				if (m_data->Objects.CreateKeyboardTexture(buf))
+					ImGui::CloseCurrentPopup();
+			}
+
 			ImGui::SameLine();
 			if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
 			ImGui::EndPopup();
@@ -1018,8 +1596,8 @@ namespace ed {
 		ImGui::SetNextWindowSize(ImVec2(Settings::Instance().CalculateSize(270), Settings::Instance().CalculateSize(220)), ImGuiCond_Always);
 		if (ImGui::BeginPopupModal("About##main_about", 0, ImGuiWindowFlags_NoResize)) {
 			ImGui::TextWrapped("(C) 2020 dfranx");
-			ImGui::TextWrapped("Version 1.3.4");
-			ImGui::TextWrapped("Internal version: %d", UpdateChecker::MyVersion);
+			ImGui::TextWrapped("Version 1.4");
+			ImGui::TextWrapped("Internal version: %d", WebAPI::InternalVersion);
 			ImGui::NewLine();
 			UIHelper::Markdown("This app is open sourced: [link](https://www.github.com/dfranx/SHADERed)");
 			ImGui::NewLine();
@@ -1059,7 +1637,16 @@ namespace ed {
 
 			ImGui::NewLine();
 			ImGui::Separator();
-			ImGui::TextWrapped("Have an idea for a feature that's missing? Suggest it ");
+
+			ImGui::TextWrapped("KeyboardTexture:");
+			ImGui::PushFont(((CodeEditorUI*)Get(ViewID::Code))->GetImFont());
+			m_kbInfo.Render("##kbtext_info", ImVec2(0, 600), true);
+			ImGui::PopFont();
+
+			ImGui::NewLine();
+			ImGui::Separator();
+
+			ImGui::TextWrapped("Do you have an idea for a feature? Suggest it ");
 			ImGui::SameLine();
 			if (ImGui::Button("here"))
 				UIHelper::ShellOpen("https://github.com/dfranx/SHADERed/issues");
@@ -1076,36 +1663,27 @@ namespace ed {
 		if (ImGui::BeginPopupModal("Are you sure?##main_new_proj", 0, ImGuiWindowFlags_NoResize)) {
 			ImGui::TextWrapped("You will lose your unsaved progress if you create a new project. Are you sure you want to continue?");
 			if (ImGui::Button("Yes")) {
-				std::string oldFile = m_data->Parser.GetOpenedFile();
+				m_saveAsOldFile = m_data->Parser.GetOpenedFile();
 
-				if (m_selectedTemplate == "?empty") {
-					Settings::Instance().Project.FPCamera = false;
-					Settings::Instance().Project.ClearColor = glm::vec4(0, 0, 0, 0);
+				SaveAsProject(false, nullptr, [&]() {
+					if (m_selectedTemplate == "?empty") {
+						Settings::Instance().Project.FPCamera = false;
+						Settings::Instance().Project.ClearColor = glm::vec4(0, 0, 0, 0);
 
-					ResetWorkspace();
-					m_data->Pipeline.New(false);
-
-					SDL_SetWindowTitle(m_wnd, "SHADERed");
-				} else {
-					m_data->Parser.SetTemplate(m_selectedTemplate);
-
-					ResetWorkspace();
-					m_data->Pipeline.New();
-
-					m_data->Parser.SetTemplate(settings.General.StartUpTemplate);
-
-					SDL_SetWindowTitle(m_wnd, ("SHADERed (" + m_selectedTemplate + ")").c_str());
-				}
-
-				bool chosen = SaveAsProject();
-				if (!chosen) {
-					if (oldFile != "") {
 						ResetWorkspace();
-						m_data->Parser.Open(oldFile);
+						m_data->Pipeline.New(false);
 
-					} else
-						m_data->Parser.OpenTemplate();
-				}
+						SDL_SetWindowTitle(m_wnd, "SHADERed");
+					} else {
+						m_data->Parser.SetTemplate(m_selectedTemplate);
+
+						ResetWorkspace();
+						m_data->Pipeline.New();
+						m_data->Parser.SetTemplate(settings.General.StartUpTemplate);
+
+						SDL_SetWindowTitle(m_wnd, ("SHADERed (" + m_selectedTemplate + ")").c_str());
+					}
+				});
 
 				ImGui::CloseCurrentPopup();
 			}
@@ -1121,7 +1699,12 @@ namespace ed {
 			ImGui::TextWrapped("Path: %s", m_previewSavePath.c_str());
 			ImGui::SameLine();
 			if (ImGui::Button("...##save_prev_path"))
-				UIHelper::GetSaveFileDialog(m_previewSavePath, "*.png;*.jpg;*.jpeg;*.bmp;*.tga");
+				igfd::ImGuiFileDialog::Instance()->OpenModal("SavePreviewDlg", "Save", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".");
+			if (igfd::ImGuiFileDialog::Instance()->FileDialog("SavePreviewDlg")) {
+				if (igfd::ImGuiFileDialog::Instance()->IsOk)
+					m_previewSavePath = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				igfd::ImGuiFileDialog::Instance()->CloseDialog("SavePreviewDlg");
+			}
 
 			ImGui::Text("Width: ");
 			ImGui::SameLine();
@@ -1259,6 +1842,8 @@ namespace ed {
 				int actualSizeX = m_previewSaveSize.x * sizeMulti;
 				int actualSizeY = m_previewSaveSize.y * sizeMulti;
 
+				SystemVariableManager::Instance().SetSavingToFile(true);
+
 				// normal render
 				if (!m_savePreviewSeq) {
 					if (actualSizeX > 0 && actualSizeY > 0) {
@@ -1310,7 +1895,6 @@ namespace ed {
 					if (sizeMulti != 1) free(outPixels);
 					free(pixels);
 				} else { // sequence render
-
 					float seqDelta = 1.0f / m_savePreviewSeqFPS;
 
 					if (actualSizeX > 0 && actualSizeY > 0) {
@@ -1381,7 +1965,7 @@ namespace ed {
 								outPixels[i] = nullptr;
 
 							threadPool[i] = new std::thread([ext, filename, sizeMulti, actualSizeX, actualSizeY, &outPixels, &pixels, &needsUpdate, &curFrame, &isOver](int worker, int w, int h) {
-								char prevSavePath[MAX_PATH];
+								char prevSavePath[SHADERED_MAX_PATH];
 								while (!isOver) {
 									if (needsUpdate[worker])
 										continue;
@@ -1460,6 +2044,8 @@ namespace ed {
 					}
 				}
 
+				SystemVariableManager::Instance().SetSavingToFile(false);
+
 				m_data->Renderer.Pause(m_wasPausedPrior);
 				ImGui::CloseCurrentPopup();
 			}
@@ -1485,7 +2071,12 @@ namespace ed {
 			ImGui::TextWrapped("Output file: %s", m_expcppSavePath.c_str());
 			ImGui::SameLine();
 			if (ImGui::Button("...##expcpp_savepath"))
-				UIHelper::GetSaveFileDialog(m_expcppSavePath, "*.cpp");
+				igfd::ImGuiFileDialog::Instance()->OpenModal("ExportCPPDlg", "Save", "C++ source file (*.cpp;*.cxx){.cpp,.cxx},.*", ".");
+			if (igfd::ImGuiFileDialog::Instance()->FileDialog("ExportCPPDlg")) {
+				if (igfd::ImGuiFileDialog::Instance()->IsOk)
+					m_expcppSavePath = igfd::ImGuiFileDialog::Instance()->GetFilepathName();
+				igfd::ImGuiFileDialog::Instance()->CloseDialog("ExportCPPDlg");
+			}
 
 			// store shaders in files
 			ImGui::Text("Store shaders in memory: ");
@@ -1533,7 +2124,7 @@ namespace ed {
 
 			// export || cancel
 			if (ImGui::Button("Export")) {
-				m_expcppError = ExportCPP::Export(m_data, m_expcppSavePath, !m_expcppMemoryShaders, m_expcppCmakeFiles, m_expcppProjectName, m_expcppCmakeModules, m_expcppImage, m_expcppCopyImages);
+				m_expcppError = !ExportCPP::Export(m_data, m_expcppSavePath, !m_expcppMemoryShaders, m_expcppCmakeFiles, m_expcppProjectName, m_expcppCmakeModules, m_expcppImage, m_expcppCopyImages);
 				if (!m_expcppError)
 					ImGui::CloseCurrentPopup();
 			}
@@ -1584,37 +2175,9 @@ namespace ed {
 			ImGui::EndPopup();
 		}
 
-		
-
-		// update notification
-		if (m_isUpdateNotificationOpened) {
-			const float DISTANCE = 15.0f;
-			ImGuiIO& io = ImGui::GetIO();
-			ImVec2 window_pos = ImVec2(io.DisplaySize.x - DISTANCE, io.DisplaySize.y - DISTANCE);
-			ImVec2 window_pos_pivot = ImVec2(1.0f, 1.0f);
-			ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
-			ImGui::SetNextWindowBgAlpha(1.0f - glm::clamp(m_updateNotifyClock.getElapsedTime().asSeconds() - 5.0f, 0.0f, 2.0f) / 2.0f); // Transparent background
-			ImVec4 textClr = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-			ImVec4 windowClr = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
-			ImGui::PushStyleColor(ImGuiCol_WindowBg, textClr);
-			ImGui::PushStyleColor(ImGuiCol_Text, windowClr);
-			if (ImGui::Begin("##updateNotification", &m_isUpdateNotificationOpened, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
-				if (ImGui::IsWindowHovered())
-					m_updateNotifyClock.restart();
-
-				ImGui::Text("A new version of SHADERed is available!");
-				ImGui::SameLine();
-				if (ImGui::Button("UPDATE")) {
-					UIHelper::ShellOpen("https://shadered.org/download.php");
-					m_isUpdateNotificationOpened = false;
-				}
-			}
-			ImGui::PopStyleColor(2);
-			ImGui::End();
-
-			if (m_updateNotifyClock.getElapsedTime().asSeconds() > 7.0f)
-				m_isUpdateNotificationOpened = false;
-		}
+		// notifications
+		if (m_notifs.Has())
+			m_notifs.Render();
 
 		// render ImGUI
 		ImGui::Render();
@@ -1668,16 +2231,30 @@ namespace ed {
 		else if (!m_splashScreenLoaded) {
 			// check for updates
 			if (Settings::Instance().General.CheckUpdates) {
-				m_updateCheck.CheckForUpdates([&]() {
-					m_isUpdateNotificationOpened = true;
-					m_updateNotifyClock.restart();
+				m_data->API.CheckForApplicationUpdates([&]() {
+					m_notifs.Add(0, "A new version of SHADERed is available!", "UPDATE", [](int id, IPlugin1* pl) {
+						UIHelper::ShellOpen("https://shadered.org/download.php");
+					});
 				});
+			}
+
+			// check for plugin updates
+			if (Settings::Instance().General.CheckPluginUpdates) {
+				const auto& pluginList = m_data->Plugins.GetPluginList();
+				for (const auto& plugin : pluginList) {
+					int version = m_data->API.GetPluginVersion(plugin);
+
+					if (version > m_data->Plugins.GetPluginVersion(plugin)) {
+						m_notifs.Add(1, "A new version of " + plugin + " plugin is available!", "UPDATE", [&](int id, IPlugin1* pl) {
+							UIHelper::ShellOpen("https://shadered.org/plugin?id=" + plugin);
+						});
+					}
+				}
 			}
 
 			// check for tips
 			if (Settings::Instance().General.Tips) {
-				ed::TipFetcher tips;
-				tips.Fetch([&](int n, int i, const std::string& title, const std::string& text) {
+				m_data->API.FetchTips([&](int n, int i, const std::string& title, const std::string& text) {
 					m_tipCount = n;
 					m_tipIndex = i;
 					m_tipTitle = title + " (tip " + std::to_string(m_tipIndex + 1) + "/" + std::to_string(m_tipCount) + ")";
@@ -1691,6 +2268,8 @@ namespace ed {
 
 			// load plugins
 			m_data->Plugins.Init(m_data, this);
+
+			m_onlineExcludeGodot = m_data->Plugins.GetPlugin("GodotShaders") == nullptr;
 
 			m_splashScreenLoaded = true;
 			m_isIncompatPluginsOpened = !m_data->Plugins.GetIncompatiblePlugins().empty();
@@ -1755,6 +2334,11 @@ namespace ed {
 		m_splashScreenTimer.Restart();
 	}
 
+	void GUIManager::AddNotification(int id, const char* text, const char* btnText, std::function<void(int, IPlugin1*)> fn, IPlugin1* plugin)
+	{
+		m_notifs.Add(id, text, btnText, fn, plugin);
+	}
+
 	void GUIManager::StopDebugging()
 	{
 		CodeEditorUI* codeUI = (CodeEditorUI*)Get(ViewID::Code);
@@ -1763,35 +2347,24 @@ namespace ed {
 	}
 	void GUIManager::Destroy()
 	{
-		((CodeEditorUI*)Get(ViewID::Code))->SetTrackFileChanges(false);
-		((CodeEditorUI*)Get(ViewID::Code))->StopThreads();
+		std::string bookmarksFileLoc = "data/bookmarks.dat";
+		if (!ed::Settings::Instance().LinuxHomeDirectory.empty())
+			bookmarksFileLoc = ed::Settings::Instance().LinuxHomeDirectory + "data/bookmarks.dat";
+		std::ofstream bookmarksFile(bookmarksFileLoc);
+		bookmarksFile << igfd::ImGuiFileDialog::Instance()->SerializeBookmarks();
+		bookmarksFile.close();
+
+		CodeEditorUI* codeUI = ((CodeEditorUI*)Get(ViewID::Code));
+		codeUI->SaveSnippets();
+		codeUI->SetTrackFileChanges(false);
+		codeUI->StopThreads();
 	}
 
 	int GUIManager::AreYouSure()
 	{
-		const SDL_MessageBoxButtonData buttons[] = {
-			{ SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 2, "CANCEL" },
-			{ /* .flags, .buttonid, .text */ 0, 1, "NO" },
-			{ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 0, "YES" },
-		};
-		const SDL_MessageBoxData messageboxdata = {
-			SDL_MESSAGEBOX_INFORMATION,						/* .flags */
-			m_wnd,											/* .window */
-			"SHADERed",										/* .title */
-			"Save changes to the project before quitting?", /* .message */
-			SDL_arraysize(buttons),							/* .numbuttons */
-			buttons,										/* .buttons */
-			NULL											/* .colorScheme */
-		};
-		int buttonid;
-		if (SDL_ShowMessageBox(&messageboxdata, &buttonid) < 0) {
-			Logger::Get().Log("Failed to open message box.", true);
-			return -1;
-		}
-
+		int buttonid = UIHelper::MessageBox_YesNoCancel(m_wnd, "Save changes to the project before quitting?");
 		if (buttonid == 0) // save
 			Save();
-
 		return buttonid;
 	}
 	void GUIManager::m_tooltip(const std::string& text)
@@ -1854,11 +2427,8 @@ namespace ed {
 					cont = false;
 			}
 
-			if (cont) {
-				std::string file;
-				if (UIHelper::GetOpenFileDialog(file, "*.sprj"))
-					Open(file);
-			}
+			if (cont)
+				igfd::ImGuiFileDialog::Instance()->OpenModal("OpenProjectDlg", "Open SHADERed project", "SHADERed project (*.sprj){.sprj},.*", ".");
 		}
 		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
 		m_tooltip("Open a project");
@@ -1884,19 +2454,6 @@ namespace ed {
 #endif
 		}
 		m_tooltip("Open project directory");
-		ImGui::SameLine();
-		if (ImGui::Button(UI_ICON_FILE_CODE)) { // NEW SHADER FILE
-			std::string file;
-			bool success = UIHelper::GetSaveFileDialog(file, "*.glsl;*.hlsl;*.vert;*.frag;*.geom");
-
-			if (success) {
-				// create a file (cross platform)
-				std::ofstream ofs(file);
-				ofs << "// empty shader file\n";
-				ofs.close();
-			}
-		}
-		m_tooltip("New shader file");
 		ImGui::NextColumn();
 
 		if (ImGui::Button(UI_ICON_PIXELS)) this->CreateNewShaderPass();
@@ -1957,13 +2514,148 @@ namespace ed {
 
 		ImGui::End();
 	}
+	void GUIManager::m_onlineSearchShaders()
+	{
+		m_onlineShaders.clear();
+		for (int i = 0; i < m_onlineShaderThumbnail.size(); i++)
+			glDeleteTextures(1, &m_onlineShaderThumbnail[i]);
+		m_onlineShaderThumbnail.clear();
+
+		m_onlineShaders = m_data->API.SearchShaders(m_onlineQuery, m_onlinePage, "hot", "", m_onlineUsername, m_onlineExcludeGodot);
+
+
+
+		int minSize = std::min<int>(12, m_onlineShaders.size());
+
+		m_onlineShaderThumbnail.resize(minSize);
+
+		size_t dataLen = 0;
+		for (int i = 0; i < minSize; i++) {
+			char* data = m_data->API.AllocateThumbnail(m_onlineShaders[i].ID, dataLen);
+			if (data == nullptr) {
+				Logger::Get().Log("Failed to load a texture thumbnail for " + m_onlineShaders[i].ID, true);
+				continue;
+			}
+
+			int width, height, nrChannels;
+			unsigned char* pixelData = stbi_load_from_memory((stbi_uc*)data, dataLen, &width, &height, &nrChannels, STBI_rgb_alpha);
+
+			if (pixelData == nullptr) {
+				Logger::Get().Log("Failed to load a texture thumbnail for " + m_onlineShaders[i].ID, true);
+				free(data);
+				continue;
+			}
+
+			// normal texture
+			glGenTextures(1, &m_onlineShaderThumbnail[i]);
+			glBindTexture(GL_TEXTURE_2D, m_onlineShaderThumbnail[i]);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixelData);
+			glBindTexture(GL_TEXTURE_2D, 0);
+
+			free(data);
+		}
+	}
+	void GUIManager::m_onlineSearchPlugins()
+	{
+		m_onlinePlugins.clear();
+		for (int i = 0; i < m_onlinePluginThumbnail.size(); i++)
+			glDeleteTextures(1, &m_onlinePluginThumbnail[i]);
+		m_onlinePluginThumbnail.clear();
+
+		m_onlinePlugins = m_data->API.SearchPlugins(m_onlineQuery, m_onlinePage, "popular", m_onlineUsername);
+		
+		
+		int minSize = std::min<int>(12, m_onlinePlugins.size());
+
+		m_onlinePluginThumbnail.resize(minSize);
+
+		size_t dataLen = 0;
+		for (int i = 0; i < minSize; i++) {
+			char* data = m_data->API.DecodeThumbnail(m_onlinePlugins[i].Thumbnail, dataLen);
+			if (data == nullptr) {
+				Logger::Get().Log("Failed to load a texture thumbnail for " + m_onlinePlugins[i].ID, true);
+				continue;
+			}
+			m_onlinePlugins[i].Thumbnail.clear(); // since they are pretty large, no need to keep them in memory
+
+			int width, height, nrChannels;
+			unsigned char* pixelData = stbi_load_from_memory((stbi_uc*)data, dataLen, &width, &height, &nrChannels, STBI_rgb_alpha);
+
+			if (pixelData == nullptr) {
+				Logger::Get().Log("Failed to load a texture thumbnail for " + m_onlinePlugins[i].ID, true);
+				free(data);
+				continue;
+			}
+
+			// normal texture
+			glGenTextures(1, &m_onlinePluginThumbnail[i]);
+			glBindTexture(GL_TEXTURE_2D, m_onlinePluginThumbnail[i]);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixelData);
+			glBindTexture(GL_TEXTURE_2D, 0);
+
+			free(data);
+		}
+	}
+	void GUIManager::m_onlineSearchThemes()
+	{
+		m_onlineThemes.clear();
+		for (int i = 0; i < m_onlineThemeThumbnail.size(); i++)
+			glDeleteTextures(1, &m_onlineThemeThumbnail[i]);
+		m_onlineThemeThumbnail.clear();
+
+		m_onlineThemes = m_data->API.SearchThemes(m_onlineQuery, m_onlinePage, "popular", m_onlineUsername);
+
+		int minSize = std::min<int>(12, m_onlineThemes.size());
+
+		m_onlineThemeThumbnail.resize(minSize);
+
+		size_t dataLen = 0;
+		for (int i = 0; i < minSize; i++) {
+			char* data = m_data->API.DecodeThumbnail(m_onlineThemes[i].Thumbnail, dataLen);
+			if (data == nullptr) {
+				Logger::Get().Log("Failed to load a texture thumbnail for " + m_onlineThemes[i].ID, true);
+				continue;
+			}
+			m_onlineThemes[i].Thumbnail.clear(); // since they are pretty large, no need to keep them in memory
+
+			int width, height, nrChannels;
+			unsigned char* pixelData = stbi_load_from_memory((stbi_uc*)data, dataLen, &width, &height, &nrChannels, STBI_rgb_alpha);
+
+			if (pixelData == nullptr) {
+				Logger::Get().Log("Failed to load a texture thumbnail for " + m_onlineThemes[i].ID, true);
+				free(data);
+				continue;
+			}
+
+			// normal texture
+			glGenTextures(1, &m_onlineThemeThumbnail[i]);
+			glBindTexture(GL_TEXTURE_2D, m_onlineThemeThumbnail[i]);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixelData);
+			glBindTexture(GL_TEXTURE_2D, 0);
+
+			free(data);
+		}
+	}
 	void GUIManager::m_renderOptions()
 	{
 		OptionsUI* options = (OptionsUI*)m_options;
-		static const char* optGroups[7] = {
+		static const char* optGroups[8] = {
 			"General",
 			"Editor",
-			"Debug",
+			"Code snippets",
+			"Debugger",
 			"Shortcuts",
 			"Preview",
 			"Plugins",
@@ -2077,11 +2769,170 @@ namespace ed {
 	{
 		ImGui_ImplSDL2_ProcessEvent(&e);
 	}
+	ShaderVariable::ValueType getTypeFromSPV(SPIRVParser::ValueType valType)
+	{
+		switch (valType) {
+		case SPIRVParser::ValueType::Bool:
+			return ShaderVariable::ValueType::Boolean1;
+		case SPIRVParser::ValueType::Int:
+			return ShaderVariable::ValueType::Integer1;
+		case SPIRVParser::ValueType::Float:
+			return ShaderVariable::ValueType::Float1;
+		default:
+			return ShaderVariable::ValueType::Count;
+		}
+		return ShaderVariable::ValueType::Count;
+	}
+	ShaderVariable::ValueType formVectorType(ShaderVariable::ValueType valType, int compCount)
+	{
+		if (valType == ShaderVariable::ValueType::Boolean1) {
+			if (compCount == 2) return ShaderVariable::ValueType::Boolean2;
+			if (compCount == 3) return ShaderVariable::ValueType::Boolean3;
+			if (compCount == 4) return ShaderVariable::ValueType::Boolean4;
+		}
+		else if (valType == ShaderVariable::ValueType::Integer1) {
+			if (compCount == 2) return ShaderVariable::ValueType::Integer2;
+			if (compCount == 3) return ShaderVariable::ValueType::Integer3;
+			if (compCount == 4) return ShaderVariable::ValueType::Integer4;
+		}
+		else if (valType == ShaderVariable::ValueType::Float1) {
+			if (compCount == 2) return ShaderVariable::ValueType::Float2;
+			if (compCount == 3) return ShaderVariable::ValueType::Float3;
+			if (compCount == 4) return ShaderVariable::ValueType::Float4;
+		}
+
+		return ShaderVariable::ValueType::Count;
+	}
+	ShaderVariable::ValueType formMatrixType(ShaderVariable::ValueType valType, int compCount)
+	{
+		if (compCount == 2) return ShaderVariable::ValueType::Float2x2;
+		if (compCount == 3) return ShaderVariable::ValueType::Float3x3;
+		if (compCount == 4) return ShaderVariable::ValueType::Float4x4;
+
+		return ShaderVariable::ValueType::Count;
+	}
+	void GUIManager::m_autoUniforms(ShaderVariableContainer& varManager, SPIRVParser& spv, std::vector<std::string>& uniformList)
+	{
+		PinnedUI* pinUI = ((PinnedUI*)Get(ViewID::Pinned));
+		std::vector<ShaderVariable*> vars = varManager.GetVariables();
+
+		// add variables
+		for (const auto& unif : spv.Uniforms) {
+			bool exists = false;
+			for (ShaderVariable* var : vars)
+				if (strcmp(var->Name, unif.Name.c_str()) == 0) {
+					exists = true;
+					break;
+				}
+
+			uniformList.push_back(unif.Name);
+
+			// add it 
+			if (!exists) {
+				// type
+				ShaderVariable::ValueType valType = getTypeFromSPV(unif.Type);
+				if (valType == ShaderVariable::ValueType::Count) {
+					if (unif.Type == SPIRVParser::ValueType::Vector)
+						valType = formVectorType(getTypeFromSPV(unif.BaseType), unif.TypeComponentCount);
+					else if (unif.Type == SPIRVParser::ValueType::Matrix)
+						valType = formMatrixType(getTypeFromSPV(unif.BaseType), unif.TypeComponentCount);
+				}
+
+				if (valType == ShaderVariable::ValueType::Count) {
+					std::queue<std::string> curName;
+					std::queue<SPIRVParser::Variable> curType;
+
+					curType.push(unif);
+					curName.push(unif.Name);
+
+					while (!curType.empty()) {
+						SPIRVParser::Variable type = curType.front();
+						std::string name = curName.front();
+
+						curType.pop();
+						curName.pop();
+
+						if (type.Type != SPIRVParser::ValueType::Struct) {
+							for (ShaderVariable* var : vars)
+								if (strcmp(var->Name, name.c_str()) == 0) {
+									exists = true;
+									break;
+								}
+
+							uniformList.push_back(name);
+
+							if (!exists) {
+								// add variable
+								valType = getTypeFromSPV(type.Type);
+								if (valType == ShaderVariable::ValueType::Count) {
+									if (type.Type == SPIRVParser::ValueType::Vector)
+										valType = formVectorType(getTypeFromSPV(type.BaseType), type.TypeComponentCount);
+									else if (type.Type == SPIRVParser::ValueType::Matrix)
+										valType = formMatrixType(getTypeFromSPV(type.BaseType), type.TypeComponentCount);
+								}
+
+								if (valType != ShaderVariable::ValueType::Count) {
+									ShaderVariable newVariable = ShaderVariable(valType, name.c_str(), SystemShaderVariable::None);
+									ShaderVariable* ptr = varManager.AddCopy(newVariable);
+									if (Settings::Instance().General.AutoUniformsPin)
+										pinUI->Add(ptr);
+								}
+							}
+						} else {
+							// branch
+							if (spv.UserTypes.count(type.TypeName) > 0) {
+								const std::vector<SPIRVParser::Variable>& mems = spv.UserTypes[type.TypeName];
+								for (int m = 0; m < mems.size(); m++) {
+									std::string memName = std::string(name.c_str()) + "." + mems[m].Name; // hack for \0
+									curType.push(mems[m]);
+									curName.push(memName);
+								}
+							}
+						}
+					}
+				} else {
+					// usage
+					SystemShaderVariable usage = SystemShaderVariable::None;
+					if (Settings::Instance().General.AutoUniformsFunction)
+						usage = SystemVariableManager::GetTypeFromName(unif.Name);
+
+					// add and pin
+					if (valType != ShaderVariable::ValueType::Count) {
+						ShaderVariable newVariable = ShaderVariable(valType, unif.Name.c_str(), usage);
+						ShaderVariable* ptr = varManager.AddCopy(newVariable);
+						if (Settings::Instance().General.AutoUniformsPin && usage == SystemShaderVariable::None)
+							pinUI->Add(ptr);
+					}
+				}
+			}
+		}
+	}
+	void GUIManager::m_deleteUnusedUniforms(ShaderVariableContainer& varManager, const std::vector<std::string>& spv)
+	{
+		PinnedUI* pinUI = ((PinnedUI*)Get(ViewID::Pinned));
+		std::vector<ShaderVariable*> vars = varManager.GetVariables();
+
+		for (ShaderVariable* var : vars) {
+			bool exists = false;
+			for (const auto& unif : spv)
+				if (strcmp(var->Name, unif.c_str()) == 0) {
+					exists = true;
+					break;
+				}
+
+			if (!exists) {
+				pinUI->Remove(var->Name);
+				varManager.Remove(var->Name);
+			}
+		}
+	}
 	bool GUIManager::Save()
 	{
 		if (m_data->Parser.GetOpenedFile() == "") {
-			if (!((CodeEditorUI*)Get(ViewID::Code))->RequestedProjectSave)
-				return SaveAsProject(true);
+			if (!((CodeEditorUI*)Get(ViewID::Code))->RequestedProjectSave) {
+				SaveAsProject(true);
+				return true;
+			}
 			return false;
 		}
 
@@ -2097,41 +2948,12 @@ namespace ed {
 
 		return true;
 	}
-	bool GUIManager::SaveAsProject(bool restoreCached)
+	void GUIManager::SaveAsProject(bool restoreCached, std::function<void(bool)> handle, std::function<void()> preHandle)
 	{
-		std::string file;
-		bool success = UIHelper::GetSaveFileDialog(file, "*.sprj");
-
-		if (success) {
-			m_data->Parser.SaveAs(file, true);
-
-			// cache opened code editors
-			CodeEditorUI* editor = ((CodeEditorUI*)Get(ViewID::Code));
-			std::vector<std::pair<std::string, ShaderStage>> files = editor->GetOpenedFiles();
-			std::vector<std::string> filesData = editor->GetOpenedFilesData();
-
-			// close all
-			this->ResetWorkspace();
-
-			m_data->Parser.Open(file);
-
-			std::string projName = m_data->Parser.GetOpenedFile();
-			projName = projName.substr(projName.find_last_of("/\\") + 1);
-
-			SDL_SetWindowTitle(m_wnd, ("SHADERed (" + projName + ")").c_str());
-
-			// returned cached state
-			if (restoreCached) {
-				for (auto& file : files) {
-					PipelineItem* item = m_data->Pipeline.Get(file.first.c_str());
-					editor->Open(item, file.second);
-				}
-				editor->SetOpenedFilesData(filesData);
-				editor->SaveAll();
-			}
-		}
-
-		return success;
+		m_saveAsRestoreCache = restoreCached;
+		m_saveAsHandle = handle;
+		m_saveAsPreHandle = preHandle;
+		igfd::ImGuiFileDialog::Instance()->OpenModal("SaveProjectDlg", "Save project", "SHADERed project (*.sprj){.sprj},.*", ".");
 	}
 	void GUIManager::Open(const std::string& file)
 	{
@@ -2143,6 +2965,20 @@ namespace ed {
 		m_data->Renderer.Pause(false); // unpause
 
 		m_data->Parser.Open(file);
+
+
+		// add to recents
+		std::string fileToBeOpened = file;
+		for (int i = 0; i < m_recentProjects.size(); i++) {
+			if (m_recentProjects[i] == fileToBeOpened) {
+				m_recentProjects.erase(m_recentProjects.begin() + i);
+				break;
+			}
+		}
+		m_recentProjects.insert(m_recentProjects.begin(), fileToBeOpened);
+		if (m_recentProjects.size() > 9)
+			m_recentProjects.pop_back();
+
 
 		std::string projName = m_data->Parser.GetOpenedFile();
 		projName = projName.substr(projName.find_last_of("/\\") + 1);
@@ -2171,28 +3007,11 @@ namespace ed {
 	}
 	void GUIManager::CreateNewTexture()
 	{
-		std::string path;
-		bool success = UIHelper::GetOpenFileDialog(path, "*.png;*.jpg;*.jpeg;*.bmp");
-
-		if (!success)
-			return;
-
-		std::string file = m_data->Parser.GetRelativePath(path);
-		if (!file.empty())
-			m_data->Objects.CreateTexture(file);
+		igfd::ImGuiFileDialog::Instance()->OpenModal("CreateTextureDlg", "Select texture(s)", "Image file (*.png;*.jpg;*.jpeg;*.bmp;*.tga){.png,.jpg,.jpeg,.bmp,.tga},.*", ".", 0);
 	}
 	void GUIManager::CreateNewAudio()
 	{
-		std::string path;
-		bool success = UIHelper::GetOpenFileDialog(path, "*.wav;*.flac;*.ogg;*.midi");
-
-		if (!success)
-			return;
-
-		std::string file = m_data->Parser.GetRelativePath(path);
-
-		if (!file.empty())
-			m_data->Objects.CreateAudio(file);
+		igfd::ImGuiFileDialog::Instance()->OpenModal("CreateAudioDlg", "Select audio file", "Audio file (*.wav;*.flac;*.ogg;*.midi){.wav,.flac,.ogg,.midi},.*", ".", 0);
 	}
 
 	void GUIManager::m_setupShortcuts()
@@ -2206,7 +3025,7 @@ namespace ed {
 				m_data->Renderer.Recompile(pass->Name);
 		});
 		KeyboardShortcuts::Instance().SetCallback("Project.Save", [=]() {
-			this->Save();
+			Save();
 		});
 		KeyboardShortcuts::Instance().SetCallback("Project.SaveAs", [=]() {
 			SaveAsProject(true);
@@ -2222,13 +3041,8 @@ namespace ed {
 					cont = false;
 			}
 
-			if (cont) {
-				std::string file;
-				bool success = UIHelper::GetOpenFileDialog(file, "*.sprj");
-
-				if (success)
-					this->Open(file);
-			}
+			if (cont)
+				igfd::ImGuiFileDialog::Instance()->OpenModal("OpenProjectDlg", "Open SHADERed project", "SHADERed project (*.sprj){.sprj},.*", ".");
 		});
 		KeyboardShortcuts::Instance().SetCallback("Project.New", [=]() {
 			this->ResetWorkspace();
@@ -2245,6 +3059,9 @@ namespace ed {
 		});
 		KeyboardShortcuts::Instance().SetCallback("Project.NewImage3D", [=]() {
 			CreateNewImage3D();
+		});
+		KeyboardShortcuts::Instance().SetCallback("Project.NewKeyboardTexture", [=]() {
+			CreateKeyboardTexture();
 		});
 		KeyboardShortcuts::Instance().SetCallback("Project.NewCubeMap", [=]() {
 			CreateNewCubemap();
@@ -2345,22 +3162,24 @@ namespace ed {
 		KeyboardShortcuts::Instance().SetCallback("Window.Fullscreen", [=]() {
 			Uint32 wndFlags = SDL_GetWindowFlags(m_wnd);
 			bool isFullscreen = wndFlags & SDL_WINDOW_FULLSCREEN_DESKTOP;
-
 			SDL_SetWindowFullscreen(m_wnd, (!isFullscreen) * SDL_WINDOW_FULLSCREEN_DESKTOP);
 		});
 	}
 	void GUIManager::m_checkChangelog()
 	{
-		std::ifstream verReader("current_version.txt");
+		std::string currentVersionPath = "info.dat";
+		if (!ed::Settings().Instance().LinuxHomeDirectory.empty())
+			currentVersionPath = ed::Settings().Instance().LinuxHomeDirectory + currentVersionPath;
+
+		std::ifstream verReader(currentVersionPath);
 		int curVer = 0;
 		if (verReader.is_open()) {
 			verReader >> curVer;
 			verReader.close();
 		}
 
-		if (curVer < UpdateChecker::MyVersion) {
-			ed::ChangelogFetcher fetcher;
-			fetcher.Fetch([&](const std::string& str) -> void {
+		if (curVer < WebAPI::InternalVersion) {
+			m_data->API.FetchChangelog([&](const std::string& str) -> void {
 				m_isChangelogOpened = true;
 				m_changelogText = str;
 			});
@@ -2384,8 +3203,8 @@ namespace ed {
 
 		if (m_selectedTemplate.size() == 0) {
 			if (m_templates.size() != 0) {
-				Logger::Get().Log("Default template set to " + m_selectedTemplate);
 				m_selectedTemplate = m_templates[0];
+				Logger::Get().Log("Default template set to " + m_selectedTemplate);
 			} else {
 				m_selectedTemplate = "?empty";
 				Logger::Get().Log("No templates found", true);

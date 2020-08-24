@@ -1,5 +1,72 @@
+[v1.4]
++ web version of SHADERed: https://shadered.org
++ add 'Browse online' window -> install plugins, themes & shaders through the application
++ add "Check for plugin updates on startup" option
++ add File -> Open Recent
++ fix render state saving
++ fix Gray theme's comments
+
+[v1.3.6]
++ [DEBUGGER] add immediate window
++ [DEBUGGER] add watches
++ [DEBUGGER] add conditional breakpoints
++ [DEBUGGER] add a feature that executes expressions on hover
++ [DEBUGGER] add color preview for vec3 and vec4 variables
++ add code snippets (located in Options)
++ add a feature that allows exporting images, textures & render textures to an image file
++ add ability to disable compute pass
++ add ability to update image's content from a loaded texture
++ add markers to text editor's scrollbar
++ add "Auto indent on paste" option
++ add IsSavingToFile system variable
++ add custom file dialogs
++ add ability to add multiple textures to project at once
++ add KeyboardTexture description in Help -> Information
++ implement IPlugin2
++ redesign "Output" window
++ fix text editor's "Find and replace" feature
++ fix a bug that would crash SHADERed when using multiple compute shaders
++ fix a bug that would crash SHADERed when deleting a buffer
++ fix a bug that would crash SHADERed when setting FPS limit to 0 while the FPS limit is applied to whole application
++ fix a bug that would add textures to Shader Pass' variables when using "auto variables" feature
++ fix a bug that caused SHADERed not to apply 'system value' if a variable previously used a function
++ fix cubemaps
++ fix cubemap example
++ fix a bug that would incorrectly report an error when exporting project to a C++ file
++ fix a bug that would add some themes two times to the theme list in options
++ fix a bug that wouldn't sync breakpoint's state when toggling it through the "Breakpoints" window
++ remove "Create shader file" menu item
++ rename "Active autocomplete" option to "Continuous autocomplete"
+
 [v1.3.5]
++ plugin API v1
++ add a feature that automatically detects and adds uniforms to variable manager
++ add "Active autocomplete" option
++ add user defined functions, variables & structures to text editor's autocomplete
++ add KeyboardTexture object
++ add BreakpointDisabled, UserFunction, UserType, UniformVariable, GlobalVariable, LocalVariable, FunctionArgument entries to TextEditor's theme
++ add "Syntax highlighting" option
++ add SHADERED_WEB, SHADERED_DESKTOP & SHADERED_VERSION preprocessor definitions to shaders
++ add Preview.ToggleCursorVisibility, Preview.ToggleMouseLock & Preview.ToggleTimePause shortcuts
++ add more information to the "Stats" page
++ add ability to reload texture objects
++ plugins are backward and forward compatible
++ plugins can implement their own shader language & editor
++ improve the "auto recompile" feature
++ fix text editor's ui scaling
 + fix HLSL geometry shaders
++ fix a bug that caused SHADERed to crash when deleting render textures
++ fix a bug that sometimes caused SHADERed to crash when deleting shader pass item
++ fix a bug that caused deleted plugins to stay in the "Not loaded" list in options
++ fix a bug that allowed user to create objects without a name
++ fix a bug that caused SHADERed to crash when debugging a shader that uses some image functions
++ fix cubemap saving
++ fix text editor's "Save changes" popup
++ fix "Autocomplete" option
++ fix "Brace completion"
++ fix mouse wrapping
++ rename "Recompile shader every 200ms" to "Recompile shader on content change"
++ rename "Smart predictions" to "Autocomplete"
 
 [v1.3.4]
 + replace ShaderDebugger with SPIRV-VM (introduces significant improvements to the SHADERed's debugger)

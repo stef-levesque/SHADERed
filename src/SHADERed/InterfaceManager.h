@@ -4,9 +4,10 @@
 #include <SHADERed/Objects/MessageStack.h>
 #include <SHADERed/Objects/ObjectManager.h>
 #include <SHADERed/Objects/PipelineManager.h>
-#include <SHADERed/Objects/PluginAPI/PluginManager.h>
+#include <SHADERed/Objects/PluginManager.h>
 #include <SHADERed/Objects/ProjectParser.h>
 #include <SHADERed/Objects/RenderEngine.h>
+#include <SHADERed/Objects/WebAPI.h>
 
 namespace ed {
 	class GUIManager;
@@ -29,10 +30,12 @@ namespace ed {
 		ProjectParser Parser;
 		MessageStack Messages;
 		DebugInformation Debugger;
+		WebAPI API;
 
 	private:
 		GUIManager* m_ui;
 
 		void m_fetchVertices(PixelInformation& pixel);
+		bool m_canDebug();
 	};
 }

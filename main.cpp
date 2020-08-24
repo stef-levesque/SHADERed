@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <thread>
+#include <string>
 
 #include <stb/stb_image.h>
 #include <stb/stb_image_write.h>
@@ -59,6 +60,8 @@ int main(int argc, char* argv[])
 		return 0;
 
 #if defined(__linux__) || defined(__unix__)
+	bool linuxUseHomeDir = false;
+
 	// currently the only supported argument is a path to set the working directory... dont do this check if user wants to explicitly set the working directory,
 	// TODO: if more arguments get added, use different methods to check if working directory is being set explicitly
 	{
@@ -76,10 +79,33 @@ int main(int argc, char* argv[])
 
 		for (const auto& wrkpath : toCheck) {
 			if (std::filesystem::exists(exePath + wrkpath)) {
+				linuxUseHomeDir = true;
 				std::filesystem::current_path(exePath + wrkpath);
 				ed::Logger::Get().Log("Setting current_path to " + std::filesystem::current_path().generic_string());
 				break;
 			}
+		}
+	}
+
+	if (linuxUseHomeDir) {
+		const char *homedir = getenv("XDG_DATA_HOME");
+		std::string homedirSuffix = "";
+		if (homedir == NULL) {
+			homedir = getenv("HOME");
+			homedirSuffix = "/.local/share";
+		}
+		
+		if (homedir != NULL) {
+			ed::Settings::Instance().LinuxHomeDirectory = std::string(homedir) + homedirSuffix + "/shadered/";
+
+			if (!std::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory))
+				std::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory);
+			if (!std::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "data"))
+				std::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "data");
+			if (!std::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "themes"))
+				std::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "themes");
+			if (!std::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "plugins"))
+				std::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "plugins");
 		}
 	}
 #endif
@@ -87,6 +113,14 @@ int main(int argc, char* argv[])
 	// create data directory on startup
 	if (!std::filesystem::exists("./data/"))
 		std::filesystem::create_directory("./data/");
+	if (!ed::Settings::Instance().LinuxHomeDirectory.empty() && !std::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "data/"))
+		std::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "data/");
+
+	// create temp directory
+	if (!std::filesystem::exists("./temp/"))
+		std::filesystem::create_directory("./temp/");
+	if (!ed::Settings::Instance().LinuxHomeDirectory.empty() && !std::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + "temp/"))
+		std::filesystem::create_directory(ed::Settings::Instance().LinuxHomeDirectory + "temp/");
 
 	// delete log.txt on startup
 	if (std::filesystem::exists("./log.txt")) {
@@ -116,9 +150,12 @@ int main(int argc, char* argv[])
 		ed::Logger::Get().Log("Initialized SDL2");
 
 	// load window size
+	std::string preloadDatPath = "data/preload.dat";
+	if (!ed::Settings::Instance().LinuxHomeDirectory.empty() && std::filesystem::exists(ed::Settings::Instance().LinuxHomeDirectory + preloadDatPath))
+		preloadDatPath = ed::Settings::Instance().LinuxHomeDirectory + preloadDatPath;
 	short wndWidth = 800, wndHeight = 600, wndPosX = -1, wndPosY = -1;
 	bool fullscreen = false, maximized = false, perfMode = false;
-	std::ifstream preload("data/preload.dat");
+	std::ifstream preload(preloadDatPath);
 	if (preload.is_open()) {
 		ed::Logger::Get().Log("Loading window information from data/preload.dat");
 
@@ -199,7 +236,7 @@ int main(int argc, char* argv[])
 
 	// open an item if given in arguments
 	if (!coptsParser.ProjectFile.empty()) {
-		ed::Logger::Get().Log("Openning a file provided through argument " + coptsParser.ProjectFile);
+		ed::Logger::Get().Log("Opening a file provided through argument " + coptsParser.ProjectFile);
 		engine.UI().Open(coptsParser.ProjectFile);
 	}
 
@@ -279,7 +316,6 @@ int main(int argc, char* argv[])
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
 		engine.Render();
-
 		SDL_GL_SwapWindow(wnd);
 
 		if (minimized && delta * 1000 < 33)
@@ -297,7 +333,9 @@ int main(int argc, char* argv[])
 	} converter;
 
 	// save window size
-	std::ofstream save("data/preload.dat");
+	if (!ed::Settings::Instance().LinuxHomeDirectory.empty())
+		preloadDatPath = ed::Settings::Instance().LinuxHomeDirectory + "data/preload.dat";
+	std::ofstream save(preloadDatPath);
 
 	ed::Logger::Get().Log("Saving window information");
 
